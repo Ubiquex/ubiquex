@@ -217,6 +217,7 @@ propose-time PR trailer hash, etc.).`,
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 				}
+				ctx = relockForHCLStack(ctx, stackForLock(cmd, cfg), parsed)
 				intent = *parsed
 				sourceLabel = fromCode
 				generated = true
@@ -286,8 +287,15 @@ propose-time PR trailer hash, etc.).`,
 			// UBI-86: cli/resolve.go's own identical pair of calls,
 			// mirrored here so the override round trip works via
 			// `ubx plan`, not only `ubx resolve`.
-			if err := blueprint.ExpandCalls(ctx, &intent); err != nil {
+			callReceipts, err := blueprint.ExpandCalls(ctx, &intent)
+			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
+			}
+			// Every pull gets a visible receipt, the same discipline a
+			// declared dependency already had. An HCL call used to pull
+			// with no receipt at all.
+			for _, r := range callReceipts {
+				fmt.Fprintln(cmd.OutOrStdout(), r)
 			}
 			if err := blueprint.ApplyOverrides(&intent); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
@@ -939,6 +947,27 @@ func omittedAttributesNote(generated bool, modifies int) string {
 // "" is a legitimate answer for a stack that declares no blueprints, and
 // costs nothing: the lock is only consulted for declared dependencies,
 // and a stack with none never reaches it.
+//
+// An HCL document is the one case where the document's own stack IS
+// knowable in time, because it is parsed rather than run and the parse
+// happens before any blueprint is pulled. relockForHCLStack uses that,
+// since "" would otherwise put every HCL document in a directory into
+// one lock bucket where each plan prunes the others' entries.
+// relockForHCLStack re-keys the lock policy on an HCL document's own
+// declared stack.
+//
+// Only when nothing more specific was given: an explicit --stack still
+// wins, and so does .ubx/config's own stack key, both of which are
+// deliberate statements about which stack this is.
+func relockForHCLStack(ctx context.Context, current string, parsed *resolver.IntentFile) context.Context {
+	if current != "" || parsed == nil || parsed.Stack == "" {
+		return ctx
+	}
+	p := blueprint.LockPolicyFrom(ctx)
+	p.Stack = parsed.Stack
+	return blueprint.WithLockPolicy(ctx, p)
+}
+
 func stackForLock(cmd *cobra.Command, cfg *Config) string {
 	if v, err := cmd.Flags().GetString("stack"); err == nil && v != "" {
 		return v

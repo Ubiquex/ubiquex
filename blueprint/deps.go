@@ -100,8 +100,32 @@ func resolveDeclaredBlueprints(ctx context.Context, entryDir string) ([]Resolved
 	return resolved, notes, nil
 }
 
-// resolveOne pulls (or reuses) and verifies one declaration.
+// resolveOne pulls (or reuses) and verifies one declaration, requiring
+// the pulled blueprint to be the one the declaration named.
 func resolveOne(ctx context.Context, dep Declaration, expectHash string) (ResolvedDep, error) {
+	return resolveOneNamed(ctx, dep, expectHash, true)
+}
+
+// resolveOneAdoptingName is resolveOne for a caller that DECLARED no
+// name and derived one instead.
+//
+// An HCL blueprint call is the case. Its name comes from the source's
+// own last path segment, so comparing that against the blueprint's own
+// packaged name cannot catch a wrong blueprint under an expected name,
+// which is the check's whole purpose: there is no independently stated
+// expectation to violate. It can only fire when a repository or artifact
+// path is spelled differently from the blueprint inside it, which is not
+// an error and which the old HCL path never objected to.
+//
+// So the blueprint's own name is adopted rather than checked, which also
+// makes it the identity used for the lock entry and the generated
+// caller, both of which want the blueprint's real name rather than a
+// path fragment.
+func resolveOneAdoptingName(ctx context.Context, dep Declaration, expectHash string) (ResolvedDep, error) {
+	return resolveOneNamed(ctx, dep, expectHash, false)
+}
+
+func resolveOneNamed(ctx context.Context, dep Declaration, expectHash string, requireName bool) (ResolvedDep, error) {
 	var (
 		dir       string
 		manifest  *Manifest
@@ -116,8 +140,11 @@ func resolveOne(ctx context.Context, dep Declaration, expectHash string) (Resolv
 	if err != nil {
 		return ResolvedDep{}, err
 	}
-	if manifest.Name != dep.Name {
+	if requireName && manifest.Name != dep.Name {
 		return ResolvedDep{}, fmt.Errorf("declared name %q doesn't match the pulled blueprint's own declared name %q -- check the declaration", dep.Name, manifest.Name)
+	}
+	if !requireName && manifest.Name != "" {
+		dep.Name = manifest.Name
 	}
 
 	cacheNote := ""

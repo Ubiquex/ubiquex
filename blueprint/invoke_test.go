@@ -126,7 +126,7 @@ func TestExpandCalls_LocalBlueprint_TS(t *testing.T) {
 					{Name: "ci-platform call", Blueprint: dir, Args: tc.args},
 				},
 			}
-			if err := ExpandCalls(context.Background(), intent); err != nil {
+			if _, err := ExpandCalls(context.Background(), intent); err != nil {
 				t.Fatalf("ExpandCalls: %v", err)
 			}
 			if len(intent.BlueprintCalls) != 0 {
@@ -172,7 +172,7 @@ func TestExpandCalls_LocalBlueprint_Python(t *testing.T) {
 			}},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("ExpandCalls: %v", err)
 	}
 	if len(intent.Resources) != 1 {
@@ -200,7 +200,7 @@ func TestExpandCalls_MissingRequiredParam(t *testing.T) {
 			{Name: "ci-platform call", Blueprint: dir, Args: map[string]string{"queue_name": "x"}},
 		},
 	}
-	err := ExpandCalls(context.Background(), intent)
+	_, err := ExpandCalls(context.Background(), intent)
 	if err == nil {
 		t.Fatal("expected an error for a missing required param (max_receive_count), got nil")
 	}
@@ -222,7 +222,7 @@ func TestExpandCalls_NoBuiltLanguage_Errors(t *testing.T) {
 			{Name: "x", Blueprint: dir, Args: map[string]string{}},
 		},
 	}
-	err := ExpandCalls(context.Background(), intent)
+	_, err := ExpandCalls(context.Background(), intent)
 	if err == nil {
 		t.Fatal("expected an error for a never-built blueprint, got nil")
 	}
@@ -249,7 +249,7 @@ func TestExpandCalls_ResourceAddressCollision_Errors(t *testing.T) {
 			}},
 		},
 	}
-	err := ExpandCalls(context.Background(), intent)
+	_, err := ExpandCalls(context.Background(), intent)
 	if err == nil {
 		t.Fatal("expected a collision error, got nil")
 	}
@@ -278,7 +278,7 @@ func TestExpandCalls_LocalBlueprint_GoFallback(t *testing.T) {
 			}},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Skipf("Go fallback call failed (likely an uncached github.com/ubiquex/ubx-sdk-go module on this machine, not a code bug -- see this test's own doc comment): %v", err)
 	}
 	if len(intent.Resources) != 1 {
@@ -304,8 +304,24 @@ func TestExpandCalls_GitBlueprint(t *testing.T) {
 	built := writeCallableBlueprint(t, "ts")
 
 	repoDir := initTestGitRepo(t)
-	if err := copyDir(built, filepath.Join(repoDir, "ci-platform")); err != nil {
+	inRepo := filepath.Join(repoDir, "ci-platform")
+	if err := copyDir(built, inRepo); err != nil {
 		t.Fatal(err)
+	}
+	// Packaged before it is committed.
+	//
+	// A git source is REMOTE, so it now resolves through the content
+	// store, which verifies the blueprint against its own shipped
+	// manifest. That is the same requirement the declaration path already
+	// imposes on any source it fetches, and it is new for a git-sourced
+	// HCL call, which previously hashed whatever it cloned.
+	//
+	// The consequence for a user is one command: a blueprint committed to
+	// a repository has to be packaged before it can be called from there.
+	// A blueprint called by local PATH still needs no packaging at all,
+	// which is the case the documented example uses.
+	if _, err := Package(context.Background(), inRepo, filepath.Join(t.TempDir(), "bp.tar.gz")); err != nil {
+		t.Fatalf("package: %v", err)
 	}
 	gitCommitAll(t, repoDir, "add ci-platform blueprint")
 
@@ -322,7 +338,7 @@ func TestExpandCalls_GitBlueprint(t *testing.T) {
 			},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("ExpandCalls: %v", err)
 	}
 	if len(intent.Resources) != 1 {
@@ -353,7 +369,7 @@ func TestExpandCalls_ProvenanceStamped(t *testing.T) {
 			}},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("ExpandCalls: %v", err)
 	}
 	if len(intent.Resources) != 1 {
@@ -390,7 +406,7 @@ func TestExpandCalls_ProvenanceStamped_Python(t *testing.T) {
 			}},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("ExpandCalls: %v", err)
 	}
 	sources := intent.Resources[0].Sources
@@ -427,7 +443,7 @@ func TestExpandCalls_ProvenanceStamped_Go(t *testing.T) {
 			}},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("ExpandCalls: %v", err)
 	}
 	if len(intent.Resources) != 1 {
@@ -591,7 +607,7 @@ func TestExpandCalls_ArgOrderBug_TS_RequiredAfterDefaulted(t *testing.T) {
 					{Name: "ci-platform call", Blueprint: dir, Args: tc.args},
 				},
 			}
-			if err := ExpandCalls(context.Background(), intent); err != nil {
+			if _, err := ExpandCalls(context.Background(), intent); err != nil {
 				t.Fatalf("ExpandCalls: %v", err)
 			}
 			assertArgOrderBugResourceCorrect(t, intent, tc.wantRetentionSec, tc.wantVisibilitySec)
@@ -618,7 +634,7 @@ func TestExpandCalls_ArgOrderBug_Python_RequiredAfterDefaulted(t *testing.T) {
 			}},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("ExpandCalls: %v", err)
 	}
 	assertArgOrderBugResourceCorrect(t, intent, 2592000, 10)
@@ -644,7 +660,7 @@ func TestExpandCalls_ArgOrderBug_GoFallback_RequiredAfterDefaulted(t *testing.T)
 			}},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Skipf("Go fallback call failed (likely an uncached github.com/ubiquex/ubx-sdk-go module on this machine, not a code bug -- see TestExpandCalls_LocalBlueprint_GoFallback's own identical doc comment): %v", err)
 	}
 	assertArgOrderBugResourceCorrect(t, intent, 2592000, 10)

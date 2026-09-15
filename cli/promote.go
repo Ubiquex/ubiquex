@@ -187,8 +187,12 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 			// promoted via `ubx promote` silently skipped expansion
 			// entirely. Fixed for all four paths at once, here, the one
 			// shared point every path already converges through.
-			if err := blueprint.ExpandCalls(ctx, intent); err != nil {
+			callReceipts, err := blueprint.ExpandCalls(ctx, intent)
+			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", err)}
+			}
+			for _, r := range callReceipts {
+				fmt.Fprintln(cmd.OutOrStdout(), r)
 			}
 			if err := blueprint.ApplyOverrides(intent); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("promote: %w", err)}

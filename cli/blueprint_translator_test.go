@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -613,4 +614,108 @@ export default stack("demo", () => {
 		t.Fatalf("a blueprint declaring the runtime must share the one instance: %v\n%s", err, out)
 	}
 	assertBlueprintProvenance(t, ledgerDir, "sharedrt")
+}
+
+// TestHCL_GoBlueprintWithDependency is the HCL calling path reaching the
+// same dependency machinery every other path uses.
+//
+// Before this, an HCL call evaluated with the PLAIN evaluator, which
+// knows nothing about a blueprint's own declaration. So a called
+// blueprint with any third-party dependency could not run, in any
+// language, even though it shipped its own pin:
+//
+//	github.com/google/uuid@v1.6.0: module lookup disabled by GOPROXY=off
+//
+// A clean module cache is the point: it is what every machine but the
+// blueprint author's has, and it is what made this look like it worked.
+func TestHCL_GoBlueprintWithDependency(t *testing.T) {
+	requireGoModLive(t)
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+
+	bpDir := filepath.Join(dir, "hclgobp")
+	if err := os.MkdirAll(bpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(f, c string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(bpDir, f), []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module example.com/hclgobp\n\ngo 1.23\n\nrequire (\n\tgithub.com/google/uuid v1.6.0\n\tgithub.com/ubiquex/ubx-sdk-go v0.6.0\n)\n")
+	write("blueprint.go", `package hclgobp
+
+import (
+	"github.com/google/uuid"
+	sdk "github.com/ubiquex/ubx-sdk-go/runtime"
+)
+
+type Config struct {
+	Name string
+}
+
+func Hclgobp(c Config) {
+	sdk.Resource(
+		sdk.ResourceBinding{WireType: "fake_widget", Fields: sdk.FieldMap{"Name": {WireName: "name"}}},
+		c.Name,
+		Config{Name: uuid.NewSHA1(uuid.Nil, []byte(c.Name)).String()[:8]},
+	)
+}
+`)
+	// The author runs `go mod tidy`, which is what the unpinned refusal
+	// tells them to do, and commits the go.sum it writes.
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = bpDir
+	tidy.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOWORK=off")
+	if out, err := tidy.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy: %v\n%s", err, out)
+	}
+	if _, err := blueprint.Package(context.Background(), bpDir, filepath.Join(t.TempDir(), "bp.tar.gz")); err != nil {
+		t.Fatalf("package: %v", err)
+	}
+
+	hcl := filepath.Join(dir, "platform.ubx.hcl")
+	if err := os.WriteFile(hcl, []byte("stack = \"payments\"\n\nblueprint \"hclgobp\" \"primary\" {\n  source = "+strconv.Quote(bpDir)+"\n  name   = \"w1\"\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runUbx(t, []string{"FAKEPROVIDER_MODE=ok-v6", "GOMODCACHE=" + goModCacheDirCLI(t)}, "plan", hcl,
+		"--provider", fakeProviderBinary,
+		"--ledger-dir", ledgerDir,
+		"--timeout", "300s",
+	)
+	if err != nil {
+		t.Fatalf("an HCL call of a Go blueprint with a dependency must resolve: %v\n%s", err, out)
+	}
+	// The blueprint's own provenance survives the change of route.
+	if !strings.Contains(out, "blueprint hclgobp:sha256:") {
+		t.Fatalf("expected the call to carry the blueprint's provenance:\n%s", out)
+	}
+}
+
+// requireGoModLive gates the one HCL test that reaches the real module
+// proxy, matching requireNPMLive beside it.
+func requireGoModLive(t *testing.T) {
+	t.Helper()
+	if os.Getenv("UBX_GOMOD_LIVE") != "1" {
+		t.Skip("skipping: set UBX_GOMOD_LIVE=1 to fetch real modules from the real proxy")
+	}
+}
+
+// goModCacheDirCLI is a module cache t.TempDir can clean up: Go writes
+// its cache read-only, so RemoveAll fails on the way out and fails a test
+// that has already passed.
+func goModCacheDirCLI(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Cleanup(func() {
+		_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+			if err == nil {
+				_ = os.Chmod(p, 0o700)
+			}
+			return nil
+		})
+	})
+	return dir
 }

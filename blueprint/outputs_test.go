@@ -226,7 +226,7 @@ func TestExpandCalls_OutputReference_RealEndToEnd(t *testing.T) {
 			},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Skipf("Go blueprint call failed (likely an uncached github.com/ubiquex/ubx-sdk-go module on this machine, not a code bug): %v", err)
 	}
 

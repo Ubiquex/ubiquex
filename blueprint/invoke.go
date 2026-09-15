@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -40,10 +41,29 @@ import (
 // produces threads the real calling stack through exactly like a
 // hand-written SDK program already does (docs/blueprint.md's own
 // "Cross-medium calling" section has the full design).
-func ExpandCalls(ctx context.Context, intent *resolver.IntentFile) error {
+// Returns the receipts every pull produced, plus any whole-resolution
+// notes, for the caller to print. Visible rather than silent: this
+// project's own "never a silent network call" discipline applies to an
+// HCL call exactly as it already did to a declared dependency, and until
+// now an HCL call pulled with no receipt at all.
+func ExpandCalls(ctx context.Context, intent *resolver.IntentFile) ([]string, error) {
 	if len(intent.BlueprintCalls) == 0 {
-		return nil
+		return nil, nil
 	}
+
+	// Resolved through the lock and the content store first, once for
+	// the whole document, so a repointed tag is refused before anything
+	// is evaluated and so a blueprint called twice is pulled once
+	// (invokedeps.go).
+	resolved, notes, err := resolveCallBlueprints(ctx, intent.BlueprintCalls)
+	if err != nil {
+		return nil, err
+	}
+	receipts := make([]string, 0, len(resolved)+len(notes))
+	for _, name := range sortedResolvedNames(resolved) {
+		receipts = append(receipts, resolved[name].Receipt)
+	}
+	receipts = append(receipts, notes...)
 
 	seen := make(map[string]string, len(intent.Resources))
 	for _, ri := range intent.Resources {
@@ -58,14 +78,14 @@ func ExpandCalls(ctx context.Context, intent *resolver.IntentFile) error {
 	outputAddr := map[string]string{}
 
 	for _, call := range intent.BlueprintCalls {
-		resources, callOutputs, err := invokeCall(ctx, intent.Stack, call)
+		resources, callOutputs, err := invokeCall(ctx, intent.Stack, call, resolved[call.Name])
 		if err != nil {
-			return fmt.Errorf("blueprint call %q (%s): %w", call.Name, call.Blueprint, err)
+			return nil, fmt.Errorf("blueprint call %q (%s): %w", call.Name, call.Blueprint, err)
 		}
 		for _, ri := range resources {
 			addr := ri.Type + "." + ri.Name
 			if owner, dup := seen[addr]; dup {
-				return fmt.Errorf("blueprint call %q (%s): resource %s collides with %s -- rename one", call.Name, call.Blueprint, addr, owner)
+				return nil, fmt.Errorf("blueprint call %q (%s): resource %s collides with %s -- rename one", call.Name, call.Blueprint, addr, owner)
 			}
 			seen[addr] = fmt.Sprintf("blueprint call %q", call.Name)
 			intent.Resources = append(intent.Resources, ri)
@@ -79,9 +99,9 @@ func ExpandCalls(ctx context.Context, intent *resolver.IntentFile) error {
 	intent.BlueprintCalls = nil
 
 	if err := rewriteBlueprintOutputRefs(intent, outputAddr); err != nil {
-		return fmt.Errorf("blueprint output reference: %w", err)
+		return nil, fmt.Errorf("blueprint output reference: %w", err)
 	}
-	return nil
+	return receipts, nil
 }
 
 // callLanguagePreference is the fixed order ExpandCalls tries a built
@@ -352,17 +372,27 @@ func blueprintNameFromCall(call resolver.BlueprintCall) string {
 // for both local and git references) and that whole temp directory is
 // removed before this function returns -- invoking a blueprint never
 // mutates its own source, local or git, under any circumstance.
-func invokeCall(ctx context.Context, callingStack string, call resolver.BlueprintCall) (resources []resolver.ResourceIntent, outputAddr map[string]string, err error) {
+func invokeCall(ctx context.Context, callingStack string, call resolver.BlueprintCall, r ResolvedDep) (resources []resolver.ResourceIntent, outputAddr map[string]string, err error) {
 	scratch, err := os.MkdirTemp("", "ubx-blueprint-call-*")
 	if err != nil {
 		return nil, nil, err
 	}
 	defer os.RemoveAll(scratch)
 
+	// A REMOTE call arrives already pulled, verified and checked against
+	// the lock (invokedeps.go). A LOCAL one is pulled here, unlocked and
+	// uncached, exactly as every call used to be: a path names a
+	// directory rather than a reference that can be repointed, and the
+	// blueprint behind it is usually one the author is editing.
 	blueprintName := blueprintNameFromCall(call)
-	dest := filepath.Join(scratch, blueprintName)
-	if _, err := Pull(ctx, call.Blueprint, dest, call.Ref, call.Path); err != nil {
-		return nil, nil, fmt.Errorf("pull: %w", err)
+	dest := r.Dir
+	if dest == "" {
+		dest = filepath.Join(scratch, blueprintName)
+		if _, err := Pull(ctx, call.Blueprint, dest, call.Ref, call.Path); err != nil {
+			return nil, nil, fmt.Errorf("pull: %w", err)
+		}
+	} else {
+		blueprintName = r.Dep.Name
 	}
 
 	// Schema-first, Ubxfile as the fallback, the same precedence every
@@ -384,11 +414,19 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 	// every other content_hash in this codebase -- truncation to a
 	// short, readable form is a presentation concern for `ubx why`/`ubx
 	// render`, never baked into the stored ref itself.
-	manifest, err := buildManifest(dest, blueprintName)
-	if err != nil {
-		return nil, nil, fmt.Errorf("compute blueprint content hash: %w", err)
+	// For a remote call, the hash the lock agreed to, rather than one
+	// derived a second time from the same bytes. For a local one,
+	// computed fresh over the pulled copy, which is what makes calling an
+	// unpackaged blueprint by path work at all: blueprint.lock.json need
+	// not exist.
+	blueprintRef := r.Ref
+	if blueprintRef == "" {
+		manifest, err := buildManifest(dest, blueprintName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("compute blueprint content hash: %w", err)
+		}
+		blueprintRef = blueprintName + ":" + manifest.ContentHash
 	}
-	blueprintRef := blueprintName + ":" + manifest.ContentHash
 
 	args, err := resolveCallArgs(desc.Params, call.Args)
 	if err != nil {
@@ -403,8 +441,25 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 	var lang, entry string
 	if desc.Schema != nil {
 		lang = desc.Schema.Entrypoint.Language
+	} else if lang, err = pickCallLanguage(dest); err != nil {
+		return nil, nil, err
+	}
+
+	// Fetch whatever the blueprint's own declaration needs, before any
+	// caller is written, and evaluate from wherever that left it: the
+	// content store for most blueprints, the deps mirror for a
+	// TypeScript one whose dependencies had to be materialised.
+	evalDir, ownImports, err := callEvalDir(ctx, lang, dest, blueprintName, r.ContentHash)
+	if err != nil {
+		return nil, nil, err
+	}
+	dest = evalDir
+
+	var entryTS string
+	if desc.Schema != nil {
 		switch lang {
 		case "ts":
+			entryTS = filepath.Join(dest, desc.Schema.Entrypoint.TSEntry)
 			entry, err = writeTSSchemaCaller(scratch, dest, callingStack, summary, desc.Schema, args)
 		case "py":
 			entry, err = writePySchemaCaller(scratch, dest, callingStack, summary, desc.Schema, args)
@@ -414,12 +469,11 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 			err = fmt.Errorf("blueprint schema names an unknown language %q", lang)
 		}
 	} else {
-		lang, err = pickCallLanguage(dest)
-		if err != nil {
-			return nil, nil, err
-		}
 		switch lang {
 		case "ts":
+			if pkg, perr := packageIdent(blueprintName); perr == nil {
+				entryTS = filepath.Join(dest, "ts", pkg+".ts")
+			}
 			entry, err = writeTSCaller(scratch, dest, blueprintName, callingStack, summary, args)
 		case "py":
 			entry, err = writePyCaller(scratch, dest, blueprintName, callingStack, summary, args)
@@ -431,14 +485,28 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 		return nil, nil, fmt.Errorf("prepare %s caller: %w", lang, err)
 	}
 
+	// The blueprint-aware evaluators, not the plain ones. The plain ones
+	// know nothing about a blueprint's own declaration, which is why a
+	// called blueprint with any third-party dependency could not run in
+	// any of the three languages (invokedeps.go).
 	var raw []byte
 	switch lang {
 	case "ts":
-		raw, err = tseval.Evaluate(ctx, entry)
+		raw, err = tseval.EvaluateWithBlueprints(ctx, entry, "", tsCallImports(blueprintName, evalDir, entryTS, ownImports))
 	case "py":
 		raw, err = pyeval.Evaluate(ctx, entry)
 	case "go":
-		raw, err = goeval.Evaluate(ctx, entry)
+		// The MODULE directory, not the blueprint root. An Ubxfile
+		// blueprint's generated Go package lives in go/, so the root has
+		// no go.mod and a workspace listing it fails to load ("cannot
+		// load module ... open .../go.mod: no such file or directory").
+		// goMountDir is the same resolver the declaration path uses for
+		// exactly this.
+		var goDirs []string
+		if modDir, _, mErr := goMountDir(evalDir); mErr == nil {
+			goDirs = []string{modDir}
+		}
+		raw, err = goeval.EvaluateWithBlueprints(ctx, entry, "", goDirs)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("evaluate (%s): %w", lang, err)
@@ -846,4 +914,20 @@ func goModDirectives(goModPath string, modulePath string) (require, replace stri
 		break
 	}
 	return require, replace, nil
+}
+
+// sortedResolvedNames orders receipts deterministically, so two runs of
+// the same document print the same lines in the same order.
+func sortedResolvedNames(resolved map[string]ResolvedDep) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range resolved {
+		if r.Dep.Name == "" || seen[r.Dep.Name] {
+			continue
+		}
+		seen[r.Dep.Name] = true
+		out = append(out, r.Dep.Name)
+	}
+	sort.Strings(out)
+	return out
 }
