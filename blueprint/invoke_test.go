@@ -715,7 +715,7 @@ export function widget(c: Config) {
 			{Name: "widget call", Blueprint: dir, Args: map[string]string{"queue_name": "payments-notifications"}},
 		},
 	}
-	if err := ExpandCalls(context.Background(), intent); err != nil {
+	if _, err := ExpandCalls(context.Background(), intent); err != nil {
 		t.Fatalf("ExpandCalls: %v", err)
 	}
 	if len(intent.Resources) != 1 {
