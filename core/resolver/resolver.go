@@ -1490,6 +1490,7 @@ func resolveOnce(l *core.Ledger, providers []DeclaredProvider, intent *IntentFil
 				After:     d.after,
 				DependsOn: dependsOn,
 				Provider:  &core.ProviderRef{Source: e.provider.Source, Version: e.provider.Version},
+				Sources:   e.ri.Sources,
 			})
 			resolutionInputs = append(resolutionInputs, core.ResolutionInput{
 				Kind:         "live_state",

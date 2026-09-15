@@ -279,6 +279,27 @@ type Modification struct {
 	After     map[string]json.RawMessage `json:"after,omitempty"`
 	DependsOn []string                   `json:"depends_on,omitempty"`
 	Provider  *ProviderRef               `json:"provider,omitempty"`
+
+	// Sources is what produced this change, the same shape a create
+	// records (UBI-281). Until this existed, provenance lived only on
+	// creates, so a resource created by a blueprint at v1 and modified
+	// by the same blueprint at v2 had exactly one recorded reference,
+	// naming v1, and every later change was anonymous.
+	//
+	// Additive and omitempty, the same shape Provider above already
+	// established: a proposal that carries none produces byte-identical
+	// canonical content to one resolved before this field existed, so no
+	// stored ledger is revalued and SchemaVersion does not move. That is
+	// the rule docs/schema.md's own destroys amendment draws when it
+	// calls its own change "a real, hashed-content shape change, not an
+	// additive field".
+	//
+	// The forward-compatibility consequence is real and is UBI-285: a
+	// binary predating this field drops it on read, and because ubx
+	// verify re-hashes what it deserialised, that binary reports every
+	// ledger containing one as BROKEN. Provider already did this in
+	// UBI-43 and it was never written down. It is written down now.
+	Sources []IntentSource `json:"sources,omitempty"`
 }
 
 // ProviderRef names which provider binary owns a resource node -- {source,
