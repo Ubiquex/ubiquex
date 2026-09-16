@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
 )
@@ -364,7 +365,17 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 			//
 			// Never fatal: a reconciliation that could not be computed
 			// must not cost someone a restore they already resolved.
-			if rec, rerr := reconcileBlueprints(ledger, targetHead, restoreStack, cfg.Blueprints); rerr == nil {
+			// Both declaration sites, not just the config table: an HCL
+			// stack declares a blueprint inline on the block and has no
+			// table entry at all, and the lock is the only record of that
+			// reachable from here. A failure to read it is not fatal, for
+			// the same reason the reconciliation itself is not.
+			stackLock, lockErr := blueprint.LoadStackLock(ledgerDir)
+			if lockErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not read the stack lock, so an inline blueprint declaration may be reported as missing: %v\n", lockErr)
+			}
+			declared := stackDeclarations(cfg.Blueprints, stackLock, restoreStack)
+			if rec, rerr := reconcileBlueprints(ledger, targetHead, restoreStack, declared); rerr == nil {
 				writeBlueprintReconcile(outWriter, st, rec)
 			} else {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not compare this head's blueprints against your table: %v\n", rerr)
