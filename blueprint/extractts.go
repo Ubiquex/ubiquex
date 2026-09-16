@@ -89,6 +89,47 @@ type denoProperty struct {
 	Name     string    `json:"name"`
 	Optional bool      `json:"optional"`
 	TSType   *denoType `json:"tsType"`
+	// JSDoc carries the property's own doc comment, which is where a
+	// TypeScript blueprint marks a param sensitive (UBI-289). deno doc
+	// preserves a tag it does not recognise verbatim, as
+	// {"kind": "unsupported", "value": "@sensitive"} -- verified against
+	// a real `deno doc --json` run rather than assumed, since the whole
+	// approach depends on it.
+	JSDoc denoJSDoc `json:"jsDoc"`
+}
+
+// denoJSDoc is the subset of deno's doc payload this needs.
+type denoJSDoc struct {
+	Tags []denoJSDocTag `json:"tags"`
+}
+
+type denoJSDocTag struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+// sensitiveJSDocTag is how a TypeScript blueprint marks a param, as a
+// doc comment rather than a wrapper type.
+//
+// A comment because the marker must not change what the blueprint's own
+// code receives: an author writing `apiToken: string` still has a
+// string. A `Sensitive<string>` wrapper would read more uniformly across
+// the three languages and would force every TypeScript blueprint to
+// unwrap a value to satisfy a flag that governs nothing about how it is
+// used.
+const sensitiveJSDocTag = "@sensitive"
+
+// hasSensitiveTag reports whether a property carries the marker. Matched
+// on the tag's own value, and tolerant of a trailing description, since
+// an author may reasonably write "@sensitive the deploy key".
+func (p denoProperty) hasSensitiveTag() bool {
+	for _, t := range p.JSDoc.Tags {
+		v := strings.TrimSpace(t.Value)
+		if v == sensitiveJSDocTag || strings.HasPrefix(v, sensitiveJSDocTag+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 type denoParam struct {
@@ -362,6 +403,7 @@ func tsParams(iface denoDef, typeName, dir string) ([]SchemaParam, error) {
 			SourceName: prop.Name,
 			Type:       pt,
 			Required:   !prop.Optional,
+			Sensitive:  prop.hasSensitiveTag(),
 		})
 	}
 	return params, nil

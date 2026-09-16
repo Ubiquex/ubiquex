@@ -213,7 +213,8 @@ func pyParams(cls pyeval.PyClass, typeName, dir string) ([]SchemaParam, error) {
 		if field.Annotation == nil {
 			return nil, fmt.Errorf("blueprint: extract %s: %s.%s has no annotation -- every param is an annotated field, since the annotation is its type", dir, typeName, field.Name)
 		}
-		inner, optional := pyStripOptional(*field.Annotation)
+		annotation, sensitive := pyStripSensitive(*field.Annotation)
+		inner, optional := pyStripOptional(annotation)
 		pt, ok := pyTypeVocabulary[inner]
 		if !ok {
 			return nil, fmt.Errorf("blueprint: extract %s: %s.%s is %s, which is not a param type -- use one of str, int, bool, list[str], list[int], sdk.CrossMarker, wrapped in Optional[...] for an optional param", dir, typeName, field.Name, *field.Annotation)
@@ -243,10 +244,59 @@ func pyParams(cls pyeval.PyClass, typeName, dir string) ([]SchemaParam, error) {
 			SourceName: field.Name,
 			Type:       pt,
 			Required:   !optional,
+			Sensitive:  sensitive,
 		})
 	}
 	return params, nil
 }
+
+// pyStripSensitive unwraps Annotated[T, sensitive] (UBI-289), returning
+// the inner annotation and whether the marker was present.
+//
+// Annotated is the right Python answer for the same reason a struct tag
+// is the right Go one: it is transparent. At runtime Annotated[str, ...]
+// IS str, so an author marking a param sensitive changes nothing about
+// what their function receives. That matters because the marker governs
+// what may be recorded about an argument and nothing about how a
+// blueprint may use one.
+//
+// Stripped before the Optional check rather than after, so
+// Annotated[Optional[str], sensitive] and Optional[Annotated[str,
+// sensitive]] both read the same way. An author should not have to know
+// which nesting this parser prefers.
+func pyStripSensitive(annotation string) (string, bool) {
+	a := strings.TrimSpace(annotation)
+	for _, prefix := range []string{"Annotated[", "typing.Annotated["} {
+		if !strings.HasPrefix(a, prefix) || !strings.HasSuffix(a, "]") {
+			continue
+		}
+		inner := strings.TrimSpace(a[len(prefix) : len(a)-1])
+		base, rest, ok := strings.Cut(inner, ",")
+		if !ok {
+			return a, false // Annotated with no metadata is not valid Python anyway
+		}
+		for _, meta := range strings.Split(rest, ",") {
+			switch strings.TrimSpace(meta) {
+			case pySensitiveMarker, "sdk." + pySensitiveMarker,
+				`"` + pySensitiveMarker + `"`, "'" + pySensitiveMarker + "'":
+				// Optional may wrap the base or be wrapped by it; either
+				// way the base is what the vocabulary has to see.
+				return strings.TrimSpace(base), true
+			}
+		}
+		return a, false
+	}
+	return a, false
+}
+
+// pySensitiveMarker is the metadata value a Python blueprint annotates
+// with. Accepted bare, dotted through the SDK, or quoted with either
+// kind of quote, because all of those are things an author will
+// reasonably write and refusing some of them would be a parser
+// preference rather than a rule. Both quote styles matter in practice:
+// the annotation text arrives as Python renders it, which is single
+// quotes.
+const pySensitiveMarker = "sensitive"
 
 // pyOutputs reads the entrypoint's return annotation. A blueprint
 // annotated None, or not annotated at all, has no outputs.

@@ -235,7 +235,9 @@ func Describe(dir string) (*Description, error) {
 func DescriptionFromSchema(dir string, s *Schema) *Description {
 	params := make([]Param, 0, len(s.Params))
 	for _, p := range s.Params {
-		params = append(params, Param{Name: p.Name, Type: p.Type, Required: p.Required})
+		// Sensitive crosses here or the flag stops at the schema: every
+		// consumer reads a Description, not a Schema.
+		params = append(params, Param{Name: p.Name, Type: p.Type, Required: p.Required, Sensitive: p.Sensitive})
 	}
 	outputs := make([]Output, 0, len(s.Outputs))
 	for _, o := range s.Outputs {
