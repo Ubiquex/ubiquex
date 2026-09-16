@@ -8,7 +8,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ubiquex/ubiquex/blueprint/spec"
@@ -216,7 +218,7 @@ func extractParams(st *ast.StructType, typeName, dir string) ([]SchemaParam, err
 				return nil, fmt.Errorf("blueprint: extract %s: %s.%s and %s.%s both become the param name %q -- rename one", dir, typeName, other, typeName, ident.Name, wire)
 			}
 			seen[wire] = ident.Name
-			params = append(params, SchemaParam{Name: wire, SourceName: ident.Name, Type: pt, Required: required})
+			params = append(params, SchemaParam{Name: wire, SourceName: ident.Name, Type: pt, Required: required, Sensitive: goFieldIsSensitive(field)})
 		}
 	}
 	return params, nil
@@ -319,4 +321,30 @@ func goModulePath(dir string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("blueprint: extract %s: go.mod has no module directive", dir)
+}
+
+// goFieldIsSensitive reads the `ubx:"sensitive"` struct tag (UBI-289).
+//
+// A struct tag rather than a wrapper type, because the marker must not
+// change what the blueprint's own code receives. It governs what may be
+// recorded about an argument and nothing else, so an author writing
+// `APIToken string` still has a string, and a wrapper forcing them to
+// unwrap it everywhere would make a recording concern visible in code
+// that has no business knowing about it.
+//
+// Each language uses its own metadata mechanism for the same reason:
+// Python's Annotated and TypeScript's JSDoc are likewise transparent to
+// the value's type. Three idioms rather than one spelling is the correct
+// outcome here, not a compromise.
+func goFieldIsSensitive(field *ast.Field) bool {
+	if field.Tag == nil {
+		return false
+	}
+	// The tag literal arrives quoted; Unquote turns `+"`"+`ubx:"sensitive"`+"`"+`
+	// into ubx:"sensitive" so StructTag can read it.
+	unquoted, err := strconv.Unquote(field.Tag.Value)
+	if err != nil {
+		return false
+	}
+	return reflect.StructTag(unquoted).Get("ubx") == "sensitive"
 }

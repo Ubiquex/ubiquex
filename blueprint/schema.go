@@ -31,7 +31,14 @@ const SchemaFileName = "blueprint.schema.json"
 
 // SchemaVersion is this document's own version, bumped when its shape
 // changes in a way a reader must notice.
-const SchemaVersion = 1
+//
+// 2 (UBI-289) adds SchemaParam.Sensitive. The bump is deliberate and the
+// refusal it causes in describe.go is the point rather than a cost: a
+// binary that cannot tell which parameters carry credentials cannot
+// safely record what a blueprint was called with, so refusing the
+// blueprint outright is the only honest response. Softening that gate
+// into a warning would turn a refusal into a leak.
+const SchemaVersion = 2
 
 // Schema is the derived description of one blueprint.
 type Schema struct {
@@ -114,6 +121,22 @@ type SchemaParam struct {
 	// Required is true for a non-pointer Go field, a TypeScript
 	// parameter with no default, or a Python parameter with no default.
 	Required bool `json:"required"`
+	// Sensitive marks a parameter whose argument carries a credential
+	// (UBI-289), so a consumer knows which argument values must never be
+	// recorded in the clear.
+	//
+	// Populated by all three extractors or by none. A blueprint whose
+	// sensitivity depended on the language it was written in would be a
+	// trap dressed as a feature: the same logical blueprint, ported,
+	// would silently stop protecting a credential, and nothing in either
+	// version would show the difference. TestSchema_SensitiveIsIdentical
+	// AcrossLanguages is what makes that a guarantee rather than an
+	// intention.
+	//
+	// Recording-only, exactly as spec.Param.Sensitive is: it says what
+	// may be written down about an argument, never what a blueprint may
+	// do with one.
+	Sensitive bool `json:"sensitive,omitempty"`
 }
 
 // SchemaOutput is one returned value. No type field: every output is a
