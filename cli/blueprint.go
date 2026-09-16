@@ -532,11 +532,19 @@ func renderBlueprintDescription(out io.Writer, st *styler, d *blueprint.Descript
 		default:
 			fmt.Fprint(out, st.Dim(", default not derivable"))
 		}
+		if p.Sensitive {
+			// Purple, the palette's own "this is provenance rather than
+			// configuration" colour, already used for a source label.
+			// Not red: nothing is wrong, and a caller reading red here
+			// would look for a problem to fix instead of a fact to act on.
+			fmt.Fprintf(out, "%s", st.Purple(", sensitive"))
+		}
 		if sn := sourceNameOfParam(d, p.Name); sn != "" && sn != p.Name {
 			fmt.Fprintf(out, "  %s", st.Dim("["+sn+"]"))
 		}
 		fmt.Fprintln(out)
 	}
+	writeSensitiveParamNote(out, st, d.Params)
 
 	fmt.Fprintf(out, "\n%s\n", readGroup(st, "outputs", countOf(len(d.Outputs))))
 	if len(d.Outputs) == 0 {
@@ -736,4 +744,39 @@ func excludedDetail(st *styler, excluded []string) string {
 	}
 	return st.Dim("excluded ") + st.Yellow(strings.Join(excluded, ", ")) +
 		st.Dim(" (installed dependencies, never blueprint content)")
+}
+
+// writeSensitiveParamNote explains the marker, once, and only where one
+// appears (UBI-289).
+//
+// `ubx blueprint describe` is what someone runs to see what a blueprint
+// expects BEFORE calling it, which makes it the one place a caller finds
+// out that an argument they are about to pass will not be recorded. A
+// bare "sensitive" on the row says a word; it does not say what the word
+// costs them, and the difference matters because the answer is not
+// intuitive in either direction.
+//
+// Two things are easy to assume and both are wrong. That the value is
+// protected everywhere, when in fact this governs the ledger and nothing
+// about what the blueprint does with it. And that the argument vanishes,
+// when in fact its NAME is recorded, so the ledger still shows the
+// argument was given.
+//
+// Printed only when a parameter is marked, because a note explaining a
+// marker nobody used is noise on every other blueprint forever.
+func writeSensitiveParamNote(out io.Writer, st *styler, params []blueprint.Param) {
+	var any bool
+	for _, p := range params {
+		if p.Sensitive {
+			any = true
+			break
+		}
+	}
+	if !any {
+		return
+	}
+	fmt.Fprintf(out, "\n    %s %s\n", st.Purple("sensitive:"),
+		st.Dim("the value you pass is never written to the ledger. Its name is, so"))
+	fmt.Fprintf(out, "    %s\n", st.Dim("`ubx why` shows the argument was given without repeating it."))
+	fmt.Fprintf(out, "    %s\n", st.Dim("This covers recording only: what the blueprint does with the value is its own."))
 }
