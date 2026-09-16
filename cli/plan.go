@@ -356,8 +356,6 @@ propose-time PR trailer hash, etc.).`,
 			}
 
 			st := newStylerFull(cmd, fullHashes)
-			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, sourceLabel), showDefaults,
-				omittedAttributesNote(generated, len(p.Delta.Modifies)))
 			// Some of what this plan changes may have been put where it is
 			// on purpose, by a restore or a revert, and the declaration
 			// this plan was resolved against has no way to know that. A
@@ -365,13 +363,19 @@ propose-time PR trailer hash, etc.).`,
 			// who skims a diff, so this is said on the receipt rather than
 			// left to be discovered afterwards.
 			//
+			// Rendered with the resources it describes, above the totals,
+			// rather than after them: it is a statement about particular
+			// addresses in the list, not about the plan.
+			//
 			// Never fatal: a marker that could not be computed must not
 			// cost someone a plan they already resolved.
-			if diverged, derr := divergencesInPlan(ledger, p); derr == nil {
-				writeDivergenceNote(outWriter, st, diverged)
-			} else {
+			diverged, derr := divergencesInPlan(ledger, p)
+			if derr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check whether this plan changes anything that was set deliberately: %v\n", derr)
 			}
+			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, sourceLabel), showDefaults,
+				func(w io.Writer) { writeDivergenceNote(w, st, diverged) },
+				omittedAttributesNote(generated, len(p.Delta.Modifies)))
 			// UBI-49 polish: the hash IS the reference (docs/cli-output-
 			// spec.md principle 3) -- the plan file's own path on disk is
 			// an implementation detail nothing downstream ever needs (not
@@ -501,7 +505,15 @@ func autodetectMedium(dir string) ([]detectedMedium, error) {
 // notes are extra lines rendered under the delta block, for something
 // true about the whole plan rather than about one resource. Variadic so
 // the three other callers stay untouched.
-func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header string, showDefaults bool, notes ...string) {
+// before, when non-nil, renders directly under the delta block and above
+// the delta/blast-radius totals. That position is for something true
+// about the RESOURCES just listed, as against notes below it, which are
+// true about the plan as a whole.
+//
+// A callback rather than another string list because what goes there is
+// styled: notes are dim single lines, and flattening a block with its own
+// colour and column alignment into that shape would lose both.
+func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header string, showDefaults bool, before func(io.Writer), notes ...string) {
 	// UBI-251: the summary sentence is back, under the header, but only
 	// where it carries authored or AI-derived content. v2 removed it as
 	// noise against a case where it paraphrased the resource list;
@@ -520,6 +532,9 @@ func renderPlanReceipt(out io.Writer, st *styler, p *core.Proposal, header strin
 	renderDestroys(out, st, p.Delta.Destroys, "  ", true)
 	if len(p.Delta.Creates) > 0 || len(p.Delta.Modifies) > 0 || len(p.Delta.Destroys) > 0 {
 		fmt.Fprintln(out)
+	}
+	if before != nil {
+		before(out)
 	}
 	for _, n := range notes {
 		if n != "" {

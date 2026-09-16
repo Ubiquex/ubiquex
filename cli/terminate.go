@@ -145,7 +145,7 @@ by design (docs/cli-output-spec.md principle 6).`,
 			// terminate's own intent is ledger-derived, never AI-authored,
 			// so Intent.Assumptions/Defaults are always empty and there's
 			// nothing for a collapsed rendering to ever collapse.
-			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, stack, ""), true)
+			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, stack, ""), true, nil)
 			// UBI-49 polish: the hash is the reference, the plan file's
 			// own path on disk is not -- see plan.go's identical fix.
 			// docs/cli-output-spec.md §v2: both footer lines green AND
