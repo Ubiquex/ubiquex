@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,5 +205,60 @@ func TestWriteDivergenceNote_ReadsCorrectlyForOneAndMany(t *testing.T) {
 		if !strings.Contains(plural, want) {
 			t.Errorf("plural output does not read correctly, missing %q:\n%s", want, plural)
 		}
+	}
+}
+
+// TestRenderPlanReceipt_DivergenceNoteSitsWithTheResources pins where
+// the note goes, which is a correctness question rather than a taste one.
+//
+// It first rendered after the totals, between the summary and the
+// next-step line. That put a statement about ONE address below the counts
+// for all of them, at an indent level nothing else used there, so it read
+// as a footnote about the plan rather than a fact about a resource in it.
+//
+// The receipt's order is resources, then totals, then next. A claim about
+// a particular address belongs in the first section.
+func TestRenderPlanReceipt_DivergenceNoteSitsWithTheResources(t *testing.T) {
+	p := &core.Proposal{
+		Stack: "payments",
+		Delta: core.Delta{Modifies: []core.Modification{{
+			Target: core.Address{Stack: "payments", Type: "fake_widget", Name: "a"},
+			After:  map[string]json.RawMessage{"name": json.RawMessage(`"v2"`)},
+		}}},
+		BlastRadius: core.BlastRadius{Modifies: 1},
+	}
+	var buf bytes.Buffer
+	renderPlanReceipt(&buf, &styler{}, p, "Plan  payments", true, func(w io.Writer) {
+		writeDivergenceNote(w, &styler{}, []divergedResource{{
+			Address:    core.Address{Stack: "payments", Type: "fake_widget", Name: "a"},
+			Divergence: core.Divergence{Kind: core.DivergenceRestore, TargetHead: "abc123"},
+		}})
+	})
+
+	out := buf.String()
+	resource := strings.Index(out, "fake_widget.a change")
+	note := strings.Index(out, "last changed deliberately")
+	totals := strings.Index(out, "delta:")
+	for name, i := range map[string]int{"resource": resource, "note": note, "totals": totals} {
+		if i < 0 {
+			t.Fatalf("%s is missing from the receipt:\n%s", name, out)
+		}
+	}
+	if !(resource < note && note < totals) {
+		t.Errorf("the note is not between the resources and the totals:\n%s", out)
+	}
+}
+
+// TestRenderPlanReceipt_NoBeforeBlockIsFine: the three other callers pass
+// nothing, and a receipt without one must render exactly as it did.
+func TestRenderPlanReceipt_NoBeforeBlockIsFine(t *testing.T) {
+	p := &core.Proposal{Stack: "payments", Delta: core.Delta{Modifies: []core.Modification{{
+		Target: core.Address{Stack: "payments", Type: "fake_widget", Name: "a"},
+	}}}}
+	var with, without bytes.Buffer
+	renderPlanReceipt(&with, &styler{}, p, "Plan  payments", true, func(w io.Writer) {})
+	renderPlanReceipt(&without, &styler{}, p, "Plan  payments", true, nil)
+	if with.String() != without.String() {
+		t.Errorf("an empty before-block changed the receipt:\n%s\nvs\n%s", with.String(), without.String())
 	}
 }

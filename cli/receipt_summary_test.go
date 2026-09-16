@@ -19,7 +19,7 @@ import (
 func renderReceipt(t *testing.T, p *core.Proposal) string {
 	t.Helper()
 	var buf bytes.Buffer
-	renderPlanReceipt(&buf, nil, p, "Plan  payments", true)
+	renderPlanReceipt(&buf, nil, p, "Plan  payments", true, nil)
 	return buf.String()
 }
 

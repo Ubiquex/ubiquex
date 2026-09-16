@@ -357,7 +357,7 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 			outWriter := cmd.OutOrStdout()
 			st := newStyler(cmd)
 			fmt.Fprintf(outWriter, "restoring %s -> ledger head %s\n", restoreStack, st.Hash(targetHead))
-			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, ""), true)
+			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, ""), true, nil)
 			// On the receipt rather than behind a flag. The failure this
 			// warns about is that the restore succeeds and the next `ubx
 			// plan` quietly undoes it, so it belongs where someone will

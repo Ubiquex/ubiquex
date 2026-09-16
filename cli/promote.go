@@ -260,7 +260,7 @@ the result is saved as a hash-addressed plan file under --to's own .ubx/plans/, 
 			// own live state/providers, so Intent.Assumptions/Defaults are
 			// always empty in practice; shown in full regardless, matching
 			// every other path's own posture, never silently collapsed.
-			renderPlanReceipt(outWriter, st, np, planReceiptHeader(st, np.Stack, ""), true)
+			renderPlanReceipt(outWriter, st, np, planReceiptHeader(st, np.Stack, ""), true, nil)
 			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}, np.BlastRadius.Destroys > 0))
 			return nil
 		},
