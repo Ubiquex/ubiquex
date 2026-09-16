@@ -203,6 +203,39 @@ type IntentSource struct {
 	// All empty for a source form that has no such part: an oci://
 	// reference embeds its own tag and sets neither rev nor path, and a
 	// local path has neither.
+	// DeclaredArgs is what the call was made with (UBI-287), name to
+	// raw string value, for the arguments safe to record.
+	//
+	// Until this existed, ExpandCalls expanded a call into resources and
+	// cleared it, so a proposal held the expanded RESULT and never the
+	// argument that produced it. That was read twice as a property of the
+	// system when it was a line of code discarding a value it had in
+	// hand, and it is the reason reconciling a blueprint's version can
+	// still leave a plan that disagrees: same blueprint, same version,
+	// different argument.
+	//
+	// WithheldArgs names the rest. A parameter declared sensitive
+	// (UBI-289) has its value recorded nowhere: this is hashed, signed,
+	// permanent content, and a ledger entry cannot be edited, so a
+	// credential written here is written forever.
+	//
+	// Two fields rather than a sentinel value inside one, because "this
+	// argument was withheld" is a different fact from any value it could
+	// have had. Folding it into a magic string would make a real argument
+	// equal to that string indistinguishable from a withheld one, which
+	// is the exact ambiguity the $redacted marker exists to avoid
+	// elsewhere.
+	//
+	// Withheld rather than fingerprinted, for now. A salted fingerprint
+	// would additionally answer "did this argument change between these
+	// two proposals", which is worth having, and it needs a salt the
+	// resolve path does not currently carry. Recorded as open on UBI-289
+	// rather than improvised here: a fingerprint can be added later
+	// without invalidating anything, and a wrong salt cannot be taken
+	// back.
+	DeclaredArgs map[string]string `json:"declared_args,omitempty"`
+	WithheldArgs []string          `json:"withheld_args,omitempty"`
+
 	Declaration    string `json:"declaration,omitempty"`
 	DeclaredSource string `json:"declared_source,omitempty"`
 	DeclaredRev    string `json:"declared_rev,omitempty"`

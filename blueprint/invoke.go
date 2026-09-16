@@ -550,7 +550,7 @@ func invokeCall(ctx context.Context, callingStack string, call resolver.Blueprin
 				kept = append(kept, s)
 			}
 		}
-		result.Resources[i].Sources = append(kept, blueprintSource(blueprintRef, call, r))
+		result.Resources[i].Sources = append(kept, blueprintSource(blueprintRef, call, r, desc.Params))
 	}
 
 	callOutputs, err := resolveCallOutputs(callingStack, desc, result.Resources, result.BlueprintOutputs)
@@ -950,8 +950,9 @@ func sortedResolvedNames(resolved map[string]ResolvedDep) []string {
 // "the blueprints table said exactly this", and inventing one for a
 // direct call by echoing call.Blueprint would make a reconciliation think
 // a table entry existed where none ever did.
-func blueprintSource(ref string, call resolver.BlueprintCall, r ResolvedDep) core.IntentSource {
+func blueprintSource(ref string, call resolver.BlueprintCall, r ResolvedDep, params []Param) core.IntentSource {
 	s := core.IntentSource{Kind: "blueprint", Ref: ref}
+	s.DeclaredArgs, s.WithheldArgs = splitCallArgs(call.Args, params)
 	if r.Dep.URL != "" {
 		s.Declaration = r.Dep.URL
 		s.DeclaredSource, s.DeclaredRev, s.DeclaredPath = r.Dep.Source, r.Dep.Ref, r.Dep.Path
@@ -959,4 +960,45 @@ func blueprintSource(ref string, call resolver.BlueprintCall, r ResolvedDep) cor
 	}
 	s.DeclaredSource, s.DeclaredRev, s.DeclaredPath = call.Blueprint, call.Ref, call.Path
 	return s
+}
+
+// splitCallArgs separates the arguments safe to record from the ones that
+// must not be (UBI-287, UBI-289).
+//
+// Sensitivity is read from the blueprint's own declared params, which is
+// the only authority for it: the caller does not know which of the values
+// they passed is a credential, and the blueprint author does.
+//
+// An argument for a parameter the blueprint does not declare cannot
+// happen, since resolveCallArgs already refuses one, but if it ever did
+// it is recorded rather than dropped. Silently discarding an argument
+// nobody could explain would be worse than recording something a reader
+// can question.
+func splitCallArgs(args map[string]string, params []Param) (map[string]string, []string) {
+	if len(args) == 0 {
+		return nil, nil
+	}
+	sensitive := make(map[string]bool, len(params))
+	for _, p := range params {
+		if p.Sensitive {
+			sensitive[p.Name] = true
+		}
+	}
+	var recorded map[string]string
+	var withheld []string
+	for name, value := range args {
+		if sensitive[name] {
+			withheld = append(withheld, name)
+			continue
+		}
+		if recorded == nil {
+			recorded = map[string]string{}
+		}
+		recorded[name] = value
+	}
+	// Sorted because this is hashed content and map iteration order is
+	// not. Canonical JSON sorts object keys for DeclaredArgs; an array
+	// has no such rule of its own, so it gets one here.
+	sort.Strings(withheld)
+	return recorded, withheld
 }
