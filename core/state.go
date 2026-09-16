@@ -298,8 +298,40 @@ func (l *Ledger) FoldState(addr Address) (state json.RawMessage, found bool, err
 	if err != nil {
 		return nil, false, fmt.Errorf("fold state: %w", err)
 	}
-	state, _, found, ferr := l.foldStateOverChain(chain, addr)
-	return state, found, ferr
+	r, ferr := l.foldStateOverChain(chain, addr)
+	return r.State, r.Found, ferr
+}
+
+// foldResult is what one fold over the chain knows about an address.
+//
+// A struct rather than a widening return list, because the readings are
+// only meaningful together: State is what the address holds, Sources is
+// what declared that state, and LastContributor is the proposal that set
+// it. Three callers each want one of them, and the guarantee worth
+// keeping is that all three describe the SAME operation.
+type foldResult struct {
+	State           json.RawMessage
+	Sources         []IntentSource
+	LastContributor *Proposal
+	Found           bool
+}
+
+// LastContributor is the proposal that last set what this address holds.
+//
+// Not merely the last proposal that mentions the address: the fold's own
+// gating applies, so an accepted-but-never-shipped change is not a
+// contributor, and neither is a shipped-but-failed one. What comes back is
+// the proposal whose effect is the state a reader sees now.
+func (l *Ledger) LastContributor(addr Address) (*Proposal, bool, error) {
+	chain, err := l.Chain()
+	if err != nil {
+		return nil, false, fmt.Errorf("last contributor: %w", err)
+	}
+	r, err := l.foldStateOverChain(chain, addr)
+	if err != nil {
+		return nil, false, err
+	}
+	return r.LastContributor, r.LastContributor != nil, nil
 }
 
 // FoldSources reports the provenance of the address's CURRENT state: the
@@ -322,8 +354,8 @@ func (l *Ledger) FoldSources(addr Address) (sources []IntentSource, found bool, 
 	if err != nil {
 		return nil, false, fmt.Errorf("fold sources: %w", err)
 	}
-	_, sources, found, err = l.foldStateOverChain(chain, addr)
-	return sources, found, err
+	r, err := l.foldStateOverChain(chain, addr)
+	return r.Sources, r.Found, err
 }
 
 // FoldSourcesAt is FoldSources as of an earlier head, standing in the same
@@ -347,8 +379,8 @@ func (l *Ledger) FoldSourcesAt(headID string, addr Address) (sources []IntentSou
 	if err != nil {
 		return nil, false, fmt.Errorf("fold sources: %w", err)
 	}
-	_, sources, found, ferr := l.foldStateOverChain(chain, addr)
-	return sources, found, ferr
+	r, ferr := l.foldStateOverChain(chain, addr)
+	return r.Sources, r.Found, ferr
 }
 
 // FoldStateAt is FoldState's own real implementation, generalized to fold
@@ -366,8 +398,8 @@ func (l *Ledger) FoldStateAt(headID string, addr Address) (state json.RawMessage
 	if err != nil {
 		return nil, false, fmt.Errorf("fold state: %w", err)
 	}
-	state, _, found, ferr := l.foldStateOverChain(chain, addr)
-	return state, found, ferr
+	r, ferr := l.foldStateOverChain(chain, addr)
+	return r.State, r.Found, ferr
 }
 
 // restatesDeclaration reports whether a Modification re-states the
@@ -442,8 +474,18 @@ func createNodeSources(raw json.RawMessage) []IntentSource {
 // It also returns the provenance of whatever state it arrived at, updated
 // at exactly the points state itself is contributed, so FoldSources is a
 // second reading of this one walk rather than a parallel implementation.
-func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json.RawMessage, sources []IntentSource, found bool, err error) {
-	var current map[string]interface{}
+//
+// It reports three readings of one walk, not three walks: the state, the
+// provenance of that state, and the proposal that last contributed to it.
+// They cannot disagree about which operation they came from, which is what
+// makes each one checkable against the others.
+func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (foldResult, error) {
+	var (
+		current map[string]interface{}
+		sources []IntentSource
+		last    *Proposal
+		found   bool
+	)
 	for _, p := range chain {
 		for _, raw := range p.Delta.Creates {
 			var node map[string]interface{}
@@ -459,21 +501,23 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			if st, ok := node["state"].(map[string]interface{}); ok {
 				current = st
 				sources = createNodeSources(raw)
+				last = p
 				found = true
 				continue
 			}
 			if _, ok := node["config"]; ok {
 				result, _, _, shipped, ferr := l.shippedCreateFold(p.ID, addr)
 				if ferr != nil {
-					return nil, nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
+					return foldResult{}, fmt.Errorf("fold state: %s: %w", addr, ferr)
 				}
 				if shipped {
 					var seed map[string]interface{}
 					if err := json.Unmarshal(result, &seed); err != nil {
-						return nil, nil, false, fmt.Errorf("fold state: %s: bad provider_result: %w", addr, err)
+						return foldResult{}, fmt.Errorf("fold state: %s: bad provider_result: %w", addr, err)
 					}
 					current = seed
 					sources = createNodeSources(raw)
+					last = p
 					found = true
 				}
 				// Not yet shipped (or never applied successfully): leave
@@ -516,7 +560,7 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			if p.Kind == KindChange {
 				_, shipped, ferr := l.shippedModifyFold(p.ID, addr)
 				if ferr != nil {
-					return nil, nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
+					return foldResult{}, fmt.Errorf("fold state: %s: %w", addr, ferr)
 				}
 				if !shipped {
 					continue
@@ -525,7 +569,7 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			for path, raw := range mod.After {
 				var v interface{}
 				if err := json.Unmarshal(raw, &v); err != nil {
-					return nil, nil, false, fmt.Errorf("fold state: %s: bad after[%q]: %w", addr, path, err)
+					return foldResult{}, fmt.Errorf("fold state: %s: bad after[%q]: %w", addr, path, err)
 				}
 				dotSet(current, path, v)
 			}
@@ -536,6 +580,7 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			if restatesDeclaration(&mod) {
 				sources = mod.Sources
 			}
+			last = p
 			found = true
 		}
 		for i := range p.Delta.Destroys {
@@ -545,11 +590,12 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 			}
 			_, shipped, ferr := l.shippedDestroyFold(p.ID, addr)
 			if ferr != nil {
-				return nil, nil, false, fmt.Errorf("fold state: %s: %w", addr, ferr)
+				return foldResult{}, fmt.Errorf("fold state: %s: %w", addr, ferr)
 			}
 			if shipped {
 				current = nil
 				sources = nil
+				last = nil
 				found = false
 			}
 			// Not yet shipped: leave current/found exactly as they were --
@@ -559,13 +605,13 @@ func (l *Ledger) foldStateOverChain(chain []*Proposal, addr Address) (state json
 		}
 	}
 	if !found {
-		return nil, nil, false, nil
+		return foldResult{}, nil
 	}
 	b, err := json.Marshal(current)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("fold state: %w", err)
+		return foldResult{}, fmt.Errorf("fold state: %w", err)
 	}
-	return b, sources, true, nil
+	return foldResult{State: b, Sources: sources, LastContributor: last, Found: true}, nil
 }
 
 // dotSet applies a dot-notation path update onto a generic decoded-JSON

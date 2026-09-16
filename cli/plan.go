@@ -358,6 +358,20 @@ propose-time PR trailer hash, etc.).`,
 			st := newStylerFull(cmd, fullHashes)
 			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, sourceLabel), showDefaults,
 				omittedAttributesNote(generated, len(p.Delta.Modifies)))
+			// Some of what this plan changes may have been put where it is
+			// on purpose, by a restore or a revert, and the declaration
+			// this plan was resolved against has no way to know that. A
+			// person running a routine plan expecting nothing is exactly
+			// who skims a diff, so this is said on the receipt rather than
+			// left to be discovered afterwards.
+			//
+			// Never fatal: a marker that could not be computed must not
+			// cost someone a plan they already resolved.
+			if diverged, derr := divergencesInPlan(ledger, p); derr == nil {
+				writeDivergenceNote(outWriter, st, diverged)
+			} else {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check whether this plan changes anything that was set deliberately: %v\n", derr)
+			}
 			// UBI-49 polish: the hash IS the reference (docs/cli-output-
 			// spec.md principle 3) -- the plan file's own path on disk is
 			// an implementation detail nothing downstream ever needs (not
