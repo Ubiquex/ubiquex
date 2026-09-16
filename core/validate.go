@@ -42,6 +42,9 @@ func Validate(p *Proposal) error {
 	if err := validateKind(p); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidProposal, err)
 	}
+	if err := validateSourceFields(p); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidProposal, err)
+	}
 	return nil
 }
 

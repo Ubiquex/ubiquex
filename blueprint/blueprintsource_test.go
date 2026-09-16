@@ -2,6 +2,7 @@ package blueprint
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ func TestBlueprintSource_DeclaredVsDirect(t *testing.T) {
 				Ref:    "v2.1.0",
 				Path:   "ci",
 			},
-		})
+		}, nil)
 		if got.Ref != ref {
 			t.Errorf("Ref = %q, want the content-hash ref untouched", got.Ref)
 		}
@@ -46,7 +47,7 @@ func TestBlueprintSource_DeclaredVsDirect(t *testing.T) {
 			Blueprint: "./blueprints/ci-platform",
 			Ref:       "main",
 			Path:      "sub",
-		}, ResolvedDep{})
+		}, ResolvedDep{}, nil)
 		if got.Declaration != "" {
 			t.Errorf("Declaration = %q, want empty: no blueprints table entry exists to quote", got.Declaration)
 		}
@@ -63,7 +64,7 @@ func TestBlueprintSource_DeclaredVsDirect(t *testing.T) {
 				URL:    "oci://ghcr.io/ubx-blueprints/ts-bp:v0.1.0",
 				Source: "oci://ghcr.io/ubx-blueprints/ts-bp:v0.1.0",
 			},
-		})
+		}, nil)
 		if got.DeclaredRev != "" || got.DeclaredPath != "" {
 			t.Errorf("rev/path = %q / %q, want both empty for an oci reference", got.DeclaredRev, got.DeclaredPath)
 		}
@@ -114,5 +115,92 @@ func TestExpandCalls_DeclarationStamped(t *testing.T) {
 	// disturbing the first.
 	if !strings.HasPrefix(got.Ref, "ci-platform:sha256:") {
 		t.Errorf("Ref = %q, want the content-hash ref unchanged", got.Ref)
+	}
+}
+
+// TestSplitCallArgs_WithholdsOnlyWhatTheBlueprintDeclares is the rule
+// that decides what reaches the ledger.
+//
+// Sensitivity comes from the blueprint's declared params, which is the
+// only authority for it: a caller does not know which of the values they
+// passed is a credential, and the blueprint author does.
+func TestSplitCallArgs_WithholdsOnlyWhatTheBlueprintDeclares(t *testing.T) {
+	params := []Param{
+		{Name: "queue_name", Type: ParamString, Required: true},
+		{Name: "api_token", Type: ParamString, Required: true, Sensitive: true},
+		{Name: "deploy_key", Type: ParamString, Required: true, Sensitive: true},
+	}
+	args := map[string]string{
+		"queue_name": "payments-orders",
+		"api_token":  "ghp_realcredential",
+		"deploy_key": "-----BEGIN KEY-----",
+	}
+
+	recorded, withheld := splitCallArgs(args, params)
+
+	if got := recorded["queue_name"]; got != "payments-orders" {
+		t.Errorf("an ordinary argument was not recorded: %q", got)
+	}
+	for _, secret := range []string{"api_token", "deploy_key"} {
+		if v, present := recorded[secret]; present {
+			t.Errorf("%s reached the ledger as %q: this is permanent signed content and cannot be edited afterwards", secret, v)
+		}
+	}
+	// Sorted, because this is hashed content and map iteration is not.
+	if len(withheld) != 2 || withheld[0] != "api_token" || withheld[1] != "deploy_key" {
+		t.Errorf("withheld = %v, want the two sensitive names in sorted order", withheld)
+	}
+}
+
+// TestSplitCallArgs_NoValueAppearsAnywhere is the assertion that matters
+// most, so it looks at the whole serialised source rather than at the
+// fields it expects to be wrong.
+//
+// Checking that recorded["api_token"] is absent only proves the key I
+// thought of is absent. This proves the secret is not in the bytes at
+// all, which is the actual requirement.
+func TestSplitCallArgs_NoValueAppearsAnywhere(t *testing.T) {
+	const secret = "ghp_averyrecognisablecredential"
+	s := blueprintSource("bp:sha256:a",
+		resolver.BlueprintCall{Name: "c", Blueprint: "./bp", Args: map[string]string{
+			"queue_name": "orders",
+			"api_token":  secret,
+		}},
+		ResolvedDep{},
+		[]Param{
+			{Name: "queue_name", Type: ParamString, Required: true},
+			{Name: "api_token", Type: ParamString, Required: true, Sensitive: true},
+		})
+
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), secret) {
+		t.Fatalf("the credential is in the serialised source:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "withheld_args") || !strings.Contains(string(raw), "api_token") {
+		t.Errorf("the fact that an argument was withheld is not recorded:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "orders") {
+		t.Errorf("an ordinary argument was lost:\n%s", raw)
+	}
+}
+
+// TestSplitCallArgs_NoArgsRecordsNothing: a blueprint taking no
+// parameters must not gain an empty map in hashed content.
+func TestSplitCallArgs_NoArgsRecordsNothing(t *testing.T) {
+	recorded, withheld := splitCallArgs(nil, nil)
+	if recorded != nil || withheld != nil {
+		t.Errorf("recorded=%v withheld=%v, want both nil", recorded, withheld)
+	}
+	raw, err := json.Marshal(blueprintSource("bp:sha256:a", resolver.BlueprintCall{Name: "c"}, ResolvedDep{}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"declared_args", "withheld_args"} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("a call with no arguments gained %s:\n%s", key, raw)
+		}
 	}
 }
