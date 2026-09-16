@@ -434,6 +434,20 @@ func renderModifies(out io.Writer, st *styler, modifies []core.Modification, ind
 			fmt.Fprintln(out)
 		}
 		fmt.Fprintf(out, "%s%s\n", indent, st.YellowBold(fmt.Sprintf("~ %s change", m.Target)))
+		// Under the header, before the attributes, exactly where
+		// renderCreates already puts them. Until UBI-281 a modify had no
+		// sources to render, and when the field arrived this renderer was
+		// not taught about it, so a blueprint-produced change showed the
+		// attributes that moved and nothing about what moved them.
+		//
+		// The asymmetry was invisible from the code: the two renderers sit
+		// next to each other, one loops over sources and the other does
+		// not, and only a reader comparing them would notice. It took
+		// someone walking a real stack and seeing a create explain itself
+		// while the very next modify said nothing.
+		for _, s := range m.Sources {
+			renderIntentSource(out, st, s, indent+"  ")
+		}
 		attrIndent := indent + "    "
 		for _, path := range sortedAttributePaths(m.Before, m.After) {
 			fmt.Fprintln(out, attrIndent+st.AttrChange(path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path])))
