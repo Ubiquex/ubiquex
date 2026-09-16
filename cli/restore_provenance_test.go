@@ -149,3 +149,131 @@ func TestRestore_HandWrittenStaysHandWritten(t *testing.T) {
 		t.Fatalf("a restore of hand-written resources invented blueprint provenance:\n%s", raw)
 	}
 }
+
+// Two blueprints at the target head: ci-platform at v1 and network at v1.
+const reconcileInitialIntent = `{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "payments",
+  "intent": {"summary": "two blueprint-declared resources"},
+  "resources": [
+    {"type": "fake_widget", "name": "a", "op": "create", "config": {"name": "widget-a-v1"},
+     "sources": [{"kind": "blueprint", "ref": "ci-platform:sha256:aaa111",
+                  "declaration": "oci://ghcr.io/ubx-blueprints/ci-platform:v1",
+                  "declared_source": "oci://ghcr.io/ubx-blueprints/ci-platform:v1"}]},
+    {"type": "fake_widget", "name": "n", "op": "create", "config": {"name": "widget-n-v1"},
+     "sources": [{"kind": "blueprint", "ref": "network:sha256:ccc333",
+                  "declaration": "oci://ghcr.io/ubx-blueprints/network:v1",
+                  "declared_source": "oci://ghcr.io/ubx-blueprints/network:v1"}]}
+  ]
+}`
+
+const reconcileMoveOnIntent = `{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "payments",
+  "intent": {"summary": "move a on"},
+  "resources": [
+    {"type": "fake_widget", "name": "a", "op": "modify", "config": {"name": "widget-a-v2"},
+     "sources": [{"kind": "blueprint", "ref": "ci-platform:sha256:bbb222",
+                  "declaration": "oci://ghcr.io/ubx-blueprints/ci-platform:v2",
+                  "declared_source": "oci://ghcr.io/ubx-blueprints/ci-platform:v2"}]}
+  ]
+}`
+
+// TestRestore_ReconcilesTheWholeTable covers the three kinds in one real
+// run, including the case that motivates the whole feature: a blueprint
+// the head used that the table no longer declares at all, which needs an
+// entry added back rather than a version changed.
+func TestRestore_ReconcilesTheWholeTable(t *testing.T) {
+	requireHermeticSandbox(t)
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	// The table as it stands NOW: ci-platform has moved to v2, network
+	// has been dropped entirely, and legacy-vpc was added and never used.
+	writeStackConfigWithBlueprints(t, ledgerDir, "payments", map[string]string{
+		"ci-platform": "oci://ghcr.io/ubx-blueprints/ci-platform:v2",
+		"legacy-vpc":  "oci://ghcr.io/ubx-blueprints/legacy-vpc:v1",
+	})
+
+	targetHead := resolveAcceptShip(t, dir, ledgerDir, env, reconcileInitialIntent, "bp-both-v1")
+	resolveAcceptShip(t, dir, ledgerDir, env, reconcileMoveOnIntent, "move-a-to-v2")
+
+	out, err := runUbx(t, env, "restore", targetHead, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--timeout", "60s")
+	if err != nil {
+		t.Fatalf("ubx restore: %v\noutput: %s", err, out)
+	}
+
+	for _, want := range []string{
+		// differs
+		"ci-platform", "table says oci://ghcr.io/ubx-blueprints/ci-platform:v2",
+		"this head used oci://ghcr.io/ubx-blueprints/ci-platform:v1",
+		// missing, the motivating case
+		"network", "your table has no entry",
+		// extra
+		"legacy-vpc", "this head never used it",
+		// and the boundary, always
+		"not checked:", "arguments", "does not guarantee",
+		"nothing is edited for you",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("restore receipt does not contain %q:\n%s", want, out)
+		}
+	}
+}
+
+// A blueprint source as every proposal written before UBI-282 carries
+// one: a ref naming the bytes, and nothing saying what asked for them.
+const reconcilePreDeclarationIntent = `{
+  "schema_version": 1,
+  "kind": "ubx:intent/v1",
+  "stack": "payments",
+  "intent": {"summary": "a blueprint resource from before declarations existed"},
+  "resources": [
+    {"type": "fake_widget", "name": "a", "op": "create", "config": {"name": "widget-a-v1"},
+     "sources": [{"kind": "blueprint", "ref": "ci-platform:sha256:aaa111"}]}
+  ]
+}`
+
+// TestRestore_PreDeclarationHeadReadsAsThin is the case every existing
+// ledger is in, since declarations landed on 2026-09-16.
+//
+// A content hash names bytes and cannot be turned back into a source, so
+// such a head can only be partly reconciled. The failure to avoid is
+// silence reading as a clean bill: the reader has to be able to tell
+// "checked and matching" from "could not be checked".
+func TestRestore_PreDeclarationHeadReadsAsThin(t *testing.T) {
+	requireHermeticSandbox(t)
+	dir := t.TempDir()
+	ledgerDir := t.TempDir()
+	env := []string{"FAKEPROVIDER_MODE=ok-v6"}
+
+	// The table names it, so a name-only comparison would find nothing
+	// wrong and report a match.
+	writeStackConfigWithBlueprints(t, ledgerDir, "payments", map[string]string{
+		"ci-platform": "oci://ghcr.io/ubx-blueprints/ci-platform:v2",
+	})
+
+	targetHead := resolveAcceptShip(t, dir, ledgerDir, env, reconcilePreDeclarationIntent, "pre-declaration")
+	resolveAcceptShip(t, dir, ledgerDir, env, reconcileMoveOnIntent, "move-on")
+
+	out, err := runUbx(t, env, "restore", targetHead, "--provider", fakeProviderBinary, "--ledger-dir", ledgerDir, "--timeout", "60s")
+	if err != nil {
+		t.Fatalf("ubx restore: %v\noutput: %s", err, out)
+	}
+	for _, want := range []string{
+		"before ubx recorded declarations",
+		"cannot be turned back into a source",
+		"unchecked rather than confirmed correct",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a head with no recorded declarations does not say so:\n%s", out)
+			break
+		}
+	}
+	if strings.Contains(out, "match your table") {
+		t.Errorf("an unchecked entry was reported as matching the table:\n%s", out)
+	}
+}
