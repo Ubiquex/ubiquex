@@ -90,7 +90,7 @@ func TestApplyBlueprintRefs_ErrorNamesWhatWasFound(t *testing.T) {
 			Sources: []core.IntentSource{{Kind: "blueprint", Ref: "ubx-aws-sqs"}},
 		}},
 	}
-	found := map[string]string{"something-else": "something-else:sha256:abc"}
+	found := map[string]BlueprintProvenance{"something-else": {Ref: "something-else:sha256:abc"}}
 
 	err := applyBlueprintRefs(intent, found, "no imported Go module resolves to one")
 	if err == nil {
@@ -115,7 +115,7 @@ func TestApplyBlueprintRefs_ErrorWhenNothingWasFoundAtAll(t *testing.T) {
 			Sources: []core.IntentSource{{Kind: "blueprint", Ref: "ubx-aws-sqs"}},
 		}},
 	}
-	err := applyBlueprintRefs(intent, map[string]string{}, "no imported Go module resolves to one")
+	err := applyBlueprintRefs(intent, map[string]BlueprintProvenance{}, "no imported Go module resolves to one")
 	if err == nil {
 		t.Fatal("want a refusal")
 	}

@@ -72,7 +72,7 @@ func StampDirectCallProvenance(ctx context.Context, entryFile string, intent *re
 // or fails with a clear, named error -- never a silent no-op -- naming
 // notFoundHint (the language-specific reason a name might not resolve)
 // for whichever bare name found doesn't cover.
-func applyBlueprintRefs(intent *resolver.IntentFile, found map[string]string, notFoundHint string) error {
+func applyBlueprintRefs(intent *resolver.IntentFile, found map[string]BlueprintProvenance, notFoundHint string) error {
 	for i := range intent.Resources {
 		ri := &intent.Resources[i]
 		for j := range ri.Sources {
@@ -80,12 +80,20 @@ func applyBlueprintRefs(intent *resolver.IntentFile, found map[string]string, no
 			if s.Kind != "blueprint" || strings.Contains(s.Ref, ":") {
 				continue
 			}
-			ref, ok := found[s.Ref]
+			prov, ok := found[s.Ref]
 			if !ok {
 				return fmt.Errorf("blueprint: resolve direct-call provenance: %s.%s.%s names blueprint %q, but %s.%s",
 					intent.Stack, ri.Type, ri.Name, s.Ref, notFoundHint, discoveredSuffix(found))
 			}
-			s.Ref = ref
+			s.Ref = prov.Ref
+			// The declaration, which this pass used to drop (UBI-282
+			// follow-up). Only a DECLARED blueprint has one: a discovered
+			// root was never named in a blueprints table, so leaving it
+			// empty is the same correct answer an inline HCL call gets.
+			if prov.Dep.URL != "" {
+				s.Declaration = prov.Dep.URL
+				s.DeclaredSource, s.DeclaredRev, s.DeclaredPath = prov.Dep.Source, prov.Dep.Ref, prov.Dep.Path
+			}
 		}
 	}
 	return nil
@@ -101,7 +109,7 @@ func applyBlueprintRefs(intent *resolver.IntentFile, found map[string]string, no
 // was found instead lets a reader see a near-miss immediately, and an
 // empty list says something quite different from a list of two
 // blueprints with other names.
-func discoveredSuffix(found map[string]string) string {
+func discoveredSuffix(found map[string]BlueprintProvenance) string {
 	if len(found) == 0 {
 		return " No blueprint was found at all, so either none is imported or none of the imported ones is a blueprint this can reach on disk"
 	}
@@ -141,7 +149,7 @@ func pendingBlueprintNames(intent *resolver.IntentFile) map[string]bool {
 // a map of blueprint name (blueprintNameAt's own derivation, the SAME
 // one buildManifest/Package/Verify already use) -> full
 // "name:content_hash" ref.
-func discoverImportedBlueprints(ctx context.Context, entryFile string) (map[string]string, error) {
+func discoverImportedBlueprints(ctx context.Context, entryFile string) (map[string]BlueprintProvenance, error) {
 	roots, err := DiscoverGoBlueprintRoots(ctx, entryFile)
 	if err != nil {
 		return nil, err

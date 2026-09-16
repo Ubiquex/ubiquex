@@ -505,9 +505,15 @@ if __name__ == "__main__":
 	if len(refs) != 1 {
 		t.Fatalf("refs = %v, want exactly one entry", refs)
 	}
-	ref, ok := refs["widget-lib-real"]
-	if !ok || !strings.HasPrefix(ref, "widget-lib-real:sha256:") {
-		t.Fatalf("refs[%q] = %q, ok=%v, want a real \"widget-lib-real:sha256:...\" ref", "widget-lib-real", ref, ok)
+	prov, ok := refs["widget-lib-real"]
+	if !ok || !strings.HasPrefix(prov.Ref, "widget-lib-real:sha256:") {
+		t.Fatalf("refs[%q] = %+v, ok=%v, want a real \"widget-lib-real:sha256:...\" ref", "widget-lib-real", prov, ok)
+	}
+	// The declaration travels with it now: this blueprint is declared in
+	// requirements.txt, and until UBI-282 reached this path the SDK
+	// calling route recorded a ref and nothing about what asked for it.
+	if prov.Dep.URL == "" {
+		t.Errorf("refs[%q] carries no declaration: %+v", "widget-lib-real", prov)
 	}
 
 	var doc resolver.IntentFile
@@ -524,8 +530,14 @@ if __name__ == "__main__":
 	if err := StampDirectCallProvenancePy(&doc, refs); err != nil {
 		t.Fatalf("StampDirectCallProvenancePy: %v", err)
 	}
-	if got := doc.Resources[0].Sources[0].Ref; got != ref {
-		t.Fatalf("after stamping, resource's own ref = %q, want the real resolved ref %q", got, ref)
+	stamped := doc.Resources[0].Sources[0]
+	if stamped.Ref != prov.Ref {
+		t.Fatalf("after stamping, resource's own ref = %q, want the real resolved ref %q", stamped.Ref, prov.Ref)
+	}
+	// And the declaration reaches the resource, which is the half the SDK
+	// calling path used to drop entirely.
+	if stamped.Declaration != prov.Dep.URL {
+		t.Errorf("after stamping, declaration = %q, want %q", stamped.Declaration, prov.Dep.URL)
 	}
 }
 
