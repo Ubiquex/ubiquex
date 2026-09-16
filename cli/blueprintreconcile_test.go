@@ -406,3 +406,30 @@ func seedAdoptionWithSource(t *testing.T, l *core.Ledger, addr core.Address, src
 		t.Fatalf("seed: %v", err)
 	}
 }
+
+// TestWriteBlueprintReconcile_DroppedExplanationOnlyWhenDropped: the
+// explanation names a situation, and printing it beside a report that
+// does not contain that situation sends a reader looking for a dropped
+// blueprint there is not one of.
+func TestWriteBlueprintReconcile_DroppedExplanationOnlyWhenDropped(t *testing.T) {
+	versionOnly := renderReconcile(t, blueprintReconcile{UsedAll: 1, Differs: []blueprintDiff{
+		{Name: "rev-bp", Declared: "oci://x/rev:v2", Used: "oci://x/rev:v1", FromLock: true},
+	}})
+	if strings.Contains(versionOnly, "dropped blueprint") {
+		t.Errorf("a version mismatch explains a dropped blueprint that is not in this report:\n%s", versionOnly)
+	}
+	// It must still say nothing was edited, since that is true of every
+	// report and is what stops a reader assuming a fix was applied.
+	if !strings.Contains(versionOnly, "nothing is edited for you") {
+		t.Errorf("a version mismatch no longer says it edited nothing:\n%s", versionOnly)
+	}
+
+	dropped := renderReconcile(t, blueprintReconcile{UsedAll: 1, Missing: []blueprintUse{
+		{Name: "network", Declarations: []string{"oci://x/net:v1"}},
+	}})
+	for _, want := range []string{"dropped blueprint", "which file should own"} {
+		if !strings.Contains(dropped, want) {
+			t.Errorf("the case the explanation is for does not carry it, missing %q:\n%s", want, dropped)
+		}
+	}
+}
