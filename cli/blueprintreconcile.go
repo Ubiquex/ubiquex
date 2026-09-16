@@ -53,6 +53,9 @@ type blueprintUse struct {
 	// before UBI-282. Their content hash names the bytes and cannot be
 	// reversed into a source.
 	Undeclared int
+	// Hashes are the content hashes recorded for this name, which is what
+	// pairs a head's usage to a declaration. Usually one.
+	Hashes map[string]bool
 }
 
 // blueprintReconcile is the whole comparison, kept as data so it can be
@@ -95,6 +98,18 @@ func blueprintNameFromRef(ref string) string {
 	return name
 }
 
+// blueprintHashFromRef pulls the content hash off a provenance ref,
+// which is always "<name>:sha256:<hex>". The part after the first colon
+// is exactly the "sha256:<hex>" form a lock entry records, so the two
+// are directly comparable.
+func blueprintHashFromRef(ref string) string {
+	_, hash, ok := strings.Cut(ref, ":")
+	if !ok {
+		return ""
+	}
+	return hash
+}
+
 // blueprintsUsedAt collects what a head's own live resources record about
 // the blueprints that produced them.
 //
@@ -126,9 +141,12 @@ func blueprintsUsedAt(l *core.Ledger, headID, stack string) (map[string]*bluepri
 			name := blueprintNameFromRef(s.Ref)
 			u := used[name]
 			if u == nil {
-				u = &blueprintUse{Name: name}
+				u = &blueprintUse{Name: name, Hashes: map[string]bool{}}
 				used[name] = u
 				seen[name] = map[string]bool{}
+			}
+			if h := blueprintHashFromRef(s.Ref); h != "" {
+				u.Hashes[h] = true
 			}
 			// A call that named its source inline records no
 			// declaration, deliberately (UBI-282): there is no table
@@ -157,6 +175,9 @@ func blueprintsUsedAt(l *core.Ledger, headID, stack string) (map[string]*bluepri
 // declaration was found.
 type declaredSource struct {
 	Source string
+	// ContentHash is what this declaration resolved to, known only from
+	// the lock: the config table records a source and no hash.
+	ContentHash string
 	// FromLock is true when the config table had no entry and the stack
 	// lock did, which is what an HCL stack declaring inline looks like
 	// from here.
@@ -202,7 +223,7 @@ func stackDeclarations(table map[string]string, lock *blueprint.StackLock, stack
 			// only fills in names the table does not mention.
 			continue
 		}
-		out[name] = declaredSource{Source: entry.Source, FromLock: true}
+		out[name] = declaredSource{Source: entry.Source, ContentHash: entry.ContentHash, FromLock: true}
 	}
 	return out
 }
@@ -222,9 +243,60 @@ func reconcileBlueprints(l *core.Ledger, headID, stack string, declared map[stri
 	}
 	sort.Strings(names)
 
+	// # The assumption this pairing removes
+	//
+	// This report originally looked a head's blueprint name up directly in
+	// the declarations, which assumed the ledger's name and the
+	// declaration's name come from the same authority. Nothing ever said
+	// they did, and they do not.
+	//
+	// A ledger ref carries the blueprint's own PACKAGED name, from its
+	// blueprint.lock.json. A lock entry is keyed by the name the CALL
+	// used, derived from the last path segment of the source. For
+	// "oci://ghcr.io/ubx-blueprints/rev-bp:v1.0.0" holding a blueprint
+	// packaged as "bp", those are "bp" and "rev-bp", and the report named
+	// one blueprint twice: missing under one name and unused under the
+	// other. Both were the same artifact, same source, same bytes.
+	//
+	// Both differences are deliberate and both are right for their own
+	// job. The packaged name answers "what is this blueprint" and belongs
+	// in provenance. The called name answers "what did this stack ask
+	// for" and belongs in a file a person edits. Forcing either to adopt
+	// the other makes one of those answers wrong.
+	//
+	// So they are paired on content hash, which is the only value both
+	// sides derive from the artifact rather than from a name. It also
+	// works on ledgers already written, which no renaming could.
+	//
+	// The hash is available exactly where the names can diverge. A
+	// table-declared blueprint has no hash here, and needs none: resolveOne
+	// REQUIRES the pulled blueprint's packaged name to match the declared
+	// one and errors otherwise, so those two names cannot differ. Only an
+	// HCL call adopts a name instead of checking it, and only the lock
+	// records a hash.
+	declaredByHash := make(map[string]string, len(declared))
+	for name, d := range declared {
+		if d.ContentHash != "" {
+			declaredByHash[d.ContentHash] = name
+		}
+	}
+	matched := make(map[string]bool, len(declared))
+
 	for _, n := range names {
 		u := used[n]
-		decl, inTable := declared[n]
+		// Pair by hash where both sides have one, falling back to the
+		// name, which is exact for every declaration that has no hash.
+		declName := n
+		for h := range u.Hashes {
+			if dn, ok := declaredByHash[h]; ok {
+				declName = dn
+				break
+			}
+		}
+		decl, inTable := declared[declName]
+		if inTable {
+			matched[declName] = true
+		}
 		switch {
 		case len(u.Declarations) > 1:
 			// Reported rather than resolved: no single entry reproduces
@@ -247,7 +319,10 @@ func reconcileBlueprints(l *core.Ledger, headID, stack string, declared map[stri
 	}
 
 	for n := range declared {
-		if used[n] == nil {
+		// Matched rather than used[n]: a declaration paired by hash is
+		// not "never used" just because the ledger calls it something
+		// else, which is exactly the false second line this fixes.
+		if !matched[n] {
 			r.Extra = append(r.Extra, n)
 		}
 	}
