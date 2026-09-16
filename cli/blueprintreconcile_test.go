@@ -107,7 +107,7 @@ func TestWriteBlueprintReconcile_SaysItEditsNothing(t *testing.T) {
 // diverge, so it is the one case where saying so matters most.
 func TestWriteBlueprintReconcile_CleanRunStillStatesScope(t *testing.T) {
 	out := renderReconcile(t, blueprintReconcile{UsedAll: 3})
-	if !strings.Contains(out, "the 3 this head used match your table") {
+	if !strings.Contains(out, "the 3 this head used match what this stack declares") {
 		t.Errorf("clean run does not report what it compared:\n%s", out)
 	}
 	if !strings.Contains(out, "not checked:") {
@@ -430,6 +430,48 @@ func TestWriteBlueprintReconcile_DroppedExplanationOnlyWhenDropped(t *testing.T)
 	for _, want := range []string{"dropped blueprint", "which file should own"} {
 		if !strings.Contains(dropped, want) {
 			t.Errorf("the case the explanation is for does not carry it, missing %q:\n%s", want, dropped)
+		}
+	}
+}
+
+// TestWriteBlueprintReconcile_NamesBothDeclarationSitesInTheHeader: the
+// header said "your table", which is the same error the missing-entry
+// line made before it learned to read the lock. A reader whose stack
+// declares inline has no table, and a heading naming one sends them to a
+// file that does not mention this blueprint.
+func TestWriteBlueprintReconcile_NamesBothDeclarationSitesInTheHeader(t *testing.T) {
+	for name, r := range map[string]blueprintReconcile{
+		"a difference": {UsedAll: 1, Differs: []blueprintDiff{{Name: "rev-bp", Declared: "a", Used: "b", FromLock: true}}},
+		"a clean run":  {UsedAll: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := renderReconcile(t, r)
+			if strings.Contains(out, "your table") {
+				t.Errorf("the header names only the config table:\n%s", out)
+			}
+			if !strings.Contains(out, "this stack declares") {
+				t.Errorf("the header does not name what it compared:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestWriteBlueprintReconcile_DoesNotClaimArgumentsAreUnrecorded: the
+// scope statement explained that expanding a call records its result and
+// not its arguments. That described a system that has since changed, and
+// an HCL call's arguments are in the ledger now.
+//
+// The claim worth making is about this report, which does not compare
+// them. Why they might be unavailable has a different answer per calling
+// path, and stating one answer for both is how the sentence went wrong.
+func TestWriteBlueprintReconcile_DoesNotClaimArgumentsAreUnrecorded(t *testing.T) {
+	out := renderReconcile(t, blueprintReconcile{UsedAll: 1})
+	if !strings.Contains(out, "not checked: the arguments") {
+		t.Fatalf("the scope statement no longer names arguments:\n%s", out)
+	}
+	for _, stale := range []string{"records\n  its result and not its arguments", "not its arguments"} {
+		if strings.Contains(out, stale) {
+			t.Errorf("the report still explains arguments as unrecorded, which is false for an HCL call:\n%s", out)
 		}
 	}
 }

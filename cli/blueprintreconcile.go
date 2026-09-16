@@ -371,13 +371,18 @@ func reconcileBlueprints(l *core.Ledger, headID, stack string, declared map[stri
 func writeBlueprintReconcile(w io.Writer, st *styler, r blueprintReconcile) {
 	if r.Empty() {
 		if r.UsedAll > 0 {
-			fmt.Fprintf(w, "\nblueprints: the %d this head used match your table\n", r.UsedAll)
+			fmt.Fprintf(w, "\nblueprints: the %d this head used match what this stack declares\n", r.UsedAll)
 			writeReconcileScope(w)
 		}
 		return
 	}
 
-	fmt.Fprintf(w, "\nblueprints: your table does not match what this head used\n")
+	// "What this stack declares", not "your table". A declaration lives in
+	// the config table or inline on an HCL block, and naming only the
+	// first sends a reader with the second to a file that does not
+	// mention this blueprint. Same error the missing-entry line made
+	// before it learned to read both places.
+	fmt.Fprintf(w, "\nblueprints: what this stack declares does not match what this head used\n")
 	// One column for the names, so the lines read as a table rather than
 	// as prose that happens to start with a name. padStyled counts runes
 	// and ignores ANSI escapes, which plain width arithmetic does not.
@@ -464,10 +469,16 @@ func reconcileNameWidth(r blueprintReconcile) int {
 // writeReconcileScope states the boundary of the check, always.
 func writeReconcileScope(w io.Writer) {
 	fmt.Fprintf(w, "  checked: blueprint names and declared sources.\n")
-	fmt.Fprintf(w, "  not checked: the arguments each call was made with. Expanding a call records\n"+
-		"  its result and not its arguments, so the same blueprint at the same version can\n"+
-		"  still produce a different plan. Matching every line above does not guarantee the\n"+
-		"  next plan agrees with this head.\n")
+	// The explanation this used to carry, that expanding a call records
+	// its result and not its arguments, described a system that has since
+	// changed: an HCL call's arguments ARE in the ledger now. The claim
+	// worth making is the one about this report, which is that it does
+	// not compare them. Why they might be unavailable is a different
+	// question with a different answer per calling path, and stating one
+	// answer for both was how this sentence became wrong.
+	fmt.Fprintf(w, "  not checked: the arguments each call was made with, so the same blueprint at\n"+
+		"  the same version can still produce a different plan. Matching every line above\n"+
+		"  does not guarantee the next plan agrees with this head.\n")
 }
 
 // pairDeclaration finds which declaration a head's usage corresponds to,
