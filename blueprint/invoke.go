@@ -340,10 +340,28 @@ func argLiteralOrDefault(lang string, a resolvedArg) (string, error) {
 // natural place to close this gap for real (recording the blueprint's
 // own build-time name in blueprint.lock.json), not attempted here.
 func blueprintNameFromCall(call resolver.BlueprintCall) string {
-	if call.Path != "" && call.Path != "." {
-		return filepath.Base(call.Path)
+	return NameFromSource(call.Blueprint, call.Path)
+}
+
+// NameFromSource is blueprintNameFromCall's own derivation, reachable
+// from a recorded declaration rather than only from a live call.
+//
+// It is the VERSION-INDEPENDENT identity of a source, which is the
+// property that makes it useful beyond naming. Stripping the tag was
+// originally about producing a legal identifier; the same act makes
+// "oci://host/repo:v1" and "oci://host/repo:v2" derive one value, and
+// that is the only shared key between a head's record and a stack's
+// declaration that survives the version actually changing.
+//
+// A content hash does not survive it, by construction: two versions are
+// different bytes. That matters because the case a reconciliation exists
+// to report is exactly the case where the hashes differ, so pairing on
+// the hash alone works only when there is nothing to say.
+func NameFromSource(source, path string) string {
+	if path != "" && path != "." {
+		return filepath.Base(path)
 	}
-	trimmed := strings.TrimSuffix(strings.TrimSuffix(call.Blueprint, "/"), ".git")
+	trimmed := strings.TrimSuffix(strings.TrimSuffix(source, "/"), ".git")
 	base := filepath.Base(trimmed)
 	// An oci:// reference carries its version in the name itself
 	// ("repo:v0.1.0", or "repo@sha256:..."), and a version is not part
@@ -352,7 +370,7 @@ func blueprintNameFromCall(call resolver.BlueprintCall) string {
 	// refused, so a published blueprint could be pulled successfully and
 	// still not be callable (UBI-256, found publishing the first real
 	// blueprint to a registry).
-	if strings.HasPrefix(call.Blueprint, "oci://") {
+	if strings.HasPrefix(source, "oci://") {
 		if at := strings.Index(base, "@"); at >= 0 {
 			base = base[:at]
 		}
