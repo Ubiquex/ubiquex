@@ -53,9 +53,12 @@ type blueprintUse struct {
 	// before UBI-282. Their content hash names the bytes and cannot be
 	// reversed into a source.
 	Undeclared int
-	// Hashes are the content hashes recorded for this name, which is what
-	// pairs a head's usage to a declaration. Usually one.
+	// Hashes are the content hashes recorded for this name.
 	Hashes map[string]bool
+	// CalledNames are the version-independent identities of the sources
+	// this head recorded, derived the same way the lock derives its own
+	// key. This is the primary pairing key: see reconcileBlueprints.
+	CalledNames map[string]bool
 }
 
 // blueprintReconcile is the whole comparison, kept as data so it can be
@@ -141,12 +144,21 @@ func blueprintsUsedAt(l *core.Ledger, headID, stack string) (map[string]*bluepri
 			name := blueprintNameFromRef(s.Ref)
 			u := used[name]
 			if u == nil {
-				u = &blueprintUse{Name: name, Hashes: map[string]bool{}}
+				u = &blueprintUse{Name: name, Hashes: map[string]bool{}, CalledNames: map[string]bool{}}
 				used[name] = u
 				seen[name] = map[string]bool{}
 			}
 			if h := blueprintHashFromRef(s.Ref); h != "" {
 				u.Hashes[h] = true
+			}
+			// The same derivation the lock keys itself by, applied to
+			// what this head recorded, so the two sides meet on a value
+			// neither a version bump nor a rename of the packaged name
+			// disturbs.
+			if s.Declaration != "" {
+				if cn := blueprint.NameFromSource(s.Declaration, s.DeclaredPath); cn != "" {
+					u.CalledNames[cn] = true
+				}
 			}
 			// A call that named its source inline records no
 			// declaration, deliberately (UBI-282): there is no table
@@ -243,7 +255,10 @@ func reconcileBlueprints(l *core.Ledger, headID, stack string, declared map[stri
 	}
 	sort.Strings(names)
 
-	// # The assumption this pairing removes
+	// # How a head's usage is paired to a declaration
+	//
+	// Three keys, tried in order, because no single one works everywhere
+	// and the first version of this shipped with the wrong one.
 	//
 	// This report originally looked a head's blueprint name up directly in
 	// the declarations, which assumed the ledger's name and the
@@ -264,35 +279,50 @@ func reconcileBlueprints(l *core.Ledger, headID, stack string, declared map[stri
 	// for" and belongs in a file a person edits. Forcing either to adopt
 	// the other makes one of those answers wrong.
 	//
-	// So they are paired on content hash, which is the only value both
-	// sides derive from the artifact rather than from a name. It also
-	// works on ledgers already written, which no renaming could.
+	// 1. The packaged name, exact for a table-declared blueprint, because
+	//    resolveOne REQUIRES the pulled blueprint's packaged name to match
+	//    the declared one and errors otherwise. Those two cannot differ.
 	//
-	// The hash is available exactly where the names can diverge. A
-	// table-declared blueprint has no hash here, and needs none: resolveOne
-	// REQUIRES the pulled blueprint's packaged name to match the declared
-	// one and errors otherwise, so those two names cannot differ. Only an
-	// HCL call adopts a name instead of checking it, and only the lock
-	// records a hash.
+	// 2. The version-independent identity of the declared source, derived
+	//    by blueprint.NameFromSource, which is exactly how the lock
+	//    derives its own key for an HCL call. This is the one that works
+	//    when the names differ AND the version has moved.
+	//
+	// 3. The content hash, last, as a fallback for the same bytes
+	//    published under two spellings.
+	//
+	// The hash was tried first and alone, and that was wrong in the case
+	// this report exists for. Two versions of a blueprint are different
+	// bytes by construction, so a version change is precisely when hash
+	// pairing finds nothing, and both sides then fell back to names that
+	// disagree. The result was one blueprint reported twice, as missing
+	// and as unused, exactly when it should have been reported once, as a
+	// version that moved.
+	//
+	// So the key has to be something a version change does NOT disturb,
+	// and the identity of the source is that thing:
+	// "oci://host/repo:v1" and "oci://host/repo:v2" derive one value.
+	// The hash is the opposite of what was needed and is kept only as a
+	// last resort, where it can still add a pair and can no longer be the
+	// reason one is missed.
 	declaredByHash := make(map[string]string, len(declared))
+	declaredBySourceID := make(map[string]string, len(declared))
 	for name, d := range declared {
 		if d.ContentHash != "" {
 			declaredByHash[d.ContentHash] = name
+		}
+		// A lock entry is already keyed by this value, so deriving it
+		// again from the source is a no-op there and correct for a table
+		// entry, whose key is a declared name rather than a derived one.
+		if id := blueprint.NameFromSource(d.Source, ""); id != "" {
+			declaredBySourceID[id] = name
 		}
 	}
 	matched := make(map[string]bool, len(declared))
 
 	for _, n := range names {
 		u := used[n]
-		// Pair by hash where both sides have one, falling back to the
-		// name, which is exact for every declaration that has no hash.
-		declName := n
-		for h := range u.Hashes {
-			if dn, ok := declaredByHash[h]; ok {
-				declName = dn
-				break
-			}
-		}
+		declName := pairDeclaration(n, u, declared, declaredBySourceID, declaredByHash)
 		decl, inTable := declared[declName]
 		if inTable {
 			matched[declName] = true
@@ -428,4 +458,34 @@ func writeReconcileScope(w io.Writer) {
 		"  its result and not its arguments, so the same blueprint at the same version can\n"+
 		"  still produce a different plan. Matching every line above does not guarantee the\n"+
 		"  next plan agrees with this head.\n")
+}
+
+// pairDeclaration finds which declaration a head's usage corresponds to,
+// returning the used name unchanged when nothing pairs.
+//
+// The order is the point. See reconcileBlueprints for why the source
+// identity has to come before the content hash.
+func pairDeclaration(usedName string, u *blueprintUse, declared map[string]declaredSource, bySourceID, byHash map[string]string) string {
+	// 1. The packaged name, exact wherever a declaration states a name.
+	if _, ok := declared[usedName]; ok {
+		return usedName
+	}
+	// 2. The identity of the source, which survives a version change.
+	for cn := range u.CalledNames {
+		if dn, ok := bySourceID[cn]; ok {
+			return dn
+		}
+		// A lock key IS this identity, so a direct hit counts too, for a
+		// declaration whose own source no longer derives to it.
+		if _, ok := declared[cn]; ok {
+			return cn
+		}
+	}
+	// 3. Same bytes under a different spelling.
+	for h := range u.Hashes {
+		if dn, ok := byHash[h]; ok {
+			return dn
+		}
+	}
+	return usedName
 }

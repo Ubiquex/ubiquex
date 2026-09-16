@@ -271,10 +271,19 @@ func TestReconcile_PairsOnContentHashAcrossDifferentNames(t *testing.T) {
 	}
 }
 
-// TestReconcile_HashPairingStillReportsARealDifference: pairing must not
-// become a way of agreeing with everything. Two different hashes are a
-// real difference whatever the names are.
-func TestReconcile_HashPairingStillReportsARealDifference(t *testing.T) {
+// TestReconcile_VersionChangeIsOneLineNotTwo is the case this report
+// exists for, and the case the first pairing got wrong.
+//
+// A blueprint whose version moved has DIFFERENT bytes on the two sides by
+// construction, so pairing on the content hash finds nothing precisely
+// when there is something to say. Both sides then fell back to names that
+// disagree, and one blueprint was reported twice: missing under the
+// ledger's packaged name, unused under the lock's called name.
+//
+// An earlier version of this test asserted that double report as the
+// honest answer. It was not honest, it was the bug, written down as
+// intent. The correct answer is one line naming a version that moved.
+func TestReconcile_VersionChangeIsOneLineNotTwo(t *testing.T) {
 	l := core.Open(t.TempDir())
 	addr := core.Address{Stack: "payments", Type: "aws_sqs_queue", Name: "q"}
 	seedAdoptionWithSource(t, l, addr, core.IntentSource{
@@ -294,13 +303,43 @@ func TestReconcile_HashPairingStillReportsARealDifference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	// The hashes do not pair, so this falls back to the name, and the two
-	// names do not match either. That is honestly reported as a head
-	// using something the stack does not declare, plus a declaration the
-	// head never used, because from the data available that is exactly
-	// what it is.
+	if len(r.Missing) != 0 || len(r.Extra) != 0 {
+		t.Fatalf("one blueprint whose version moved was reported twice: missing=%+v extra=%v", r.Missing, r.Extra)
+	}
+	if len(r.Differs) != 1 {
+		t.Fatalf("a moved version must be reported as a difference: %+v", r.Differs)
+	}
+	d := r.Differs[0]
+	if d.Declared != "oci://ghcr.io/ubx-blueprints/rev-bp:v2.0.0" || d.Used != "oci://ghcr.io/ubx-blueprints/rev-bp:v1.0.0" {
+		t.Errorf("the difference does not name both versions: %+v", d)
+	}
+}
+
+// TestReconcile_ADifferentBlueprintIsStillTwoLines: pairing must not
+// become a way of agreeing with everything. Two unrelated blueprints are
+// genuinely a head using one thing and a stack declaring another.
+func TestReconcile_ADifferentBlueprintIsStillTwoLines(t *testing.T) {
+	l := core.Open(t.TempDir())
+	addr := core.Address{Stack: "payments", Type: "aws_sqs_queue", Name: "q"}
+	seedAdoptionWithSource(t, l, addr, core.IntentSource{
+		Kind: "blueprint", Ref: "bp:sha256:oldbytes",
+		Declaration:    "oci://ghcr.io/ubx-blueprints/rev-bp:v1.0.0",
+		DeclaredSource: "oci://ghcr.io/ubx-blueprints/rev-bp:v1.0.0",
+	})
+	// A different repository entirely, not a different version of one.
+	declared := map[string]declaredSource{
+		"other-bp": {Source: "oci://ghcr.io/ubx-blueprints/other-bp:v1.0.0", ContentHash: "sha256:otherbytes", FromLock: true},
+	}
+	head, err := l.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := reconcileBlueprints(l, head, "payments", declared)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
 	if len(r.Missing) != 1 || len(r.Extra) != 1 {
-		t.Fatalf("a genuinely different artifact must still be reported: missing=%+v extra=%v differs=%+v",
+		t.Fatalf("two unrelated blueprints must stay two findings: missing=%+v extra=%v differs=%+v",
 			r.Missing, r.Extra, r.Differs)
 	}
 }
