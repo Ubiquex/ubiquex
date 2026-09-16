@@ -117,10 +117,21 @@ func resolveOne(ctx context.Context, dep Declaration, expectHash string) (Resolv
 // path is spelled differently from the blueprint inside it, which is not
 // an error and which the old HCL path never objected to.
 //
-// So the blueprint's own name is adopted rather than checked, which also
-// makes it the identity used for the lock entry and the generated
-// caller, both of which want the blueprint's real name rather than a
-// path fragment.
+// So the blueprint's own name is adopted rather than checked, and it
+// becomes the identity used for the generated caller and for the
+// provenance ref recorded in the ledger, both of which want the
+// blueprint's real name rather than a path fragment.
+//
+// The LOCK is deliberately not one of them, and an earlier version of
+// this comment said it was. A lock entry is keyed by the name the CALL
+// used, because .ubx/blueprints.lock is a file a person edits and
+// reconciles against their own HCL block. Keying it by a packaged name
+// that appears nowhere in their stack would mean advice naming an entry
+// they cannot find, which is worse than the two identifiers differing.
+//
+// They can differ, then, and the content hash is what reconciles them:
+// it is the only value both sides derive from the artifact rather than
+// from a name. See cli/blueprintreconcile.go's own pairing.
 func resolveOneAdoptingName(ctx context.Context, dep Declaration, expectHash string) (ResolvedDep, error) {
 	return resolveOneNamed(ctx, dep, expectHash, false)
 }

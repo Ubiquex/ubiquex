@@ -183,8 +183,16 @@ func resolveCallBlueprints(ctx context.Context, calls []resolver.BlueprintCall) 
 			return nil, nil, err
 		}
 		// Keyed by the name the call derived, since that is what the
-		// lookup below has. r.Dep.Name is the blueprint's own, which may
-		// differ and is what the lock and the caller use.
+		// lookup below has, and it is also what the lock above was keyed
+		// by: a lock entry names what the CALL asked for, because it is a
+		// file a person edits alongside their own HCL block.
+		//
+		// r.Dep.Name is the blueprint's own packaged name, which may
+		// differ, and is what the generated caller and the ledger's
+		// provenance ref use. An earlier version of this comment said the
+		// lock used it too. It does not, and the two identifiers are
+		// reconciled by content hash rather than by being forced to
+		// agree.
 		resolvedByName[dep.Name] = r
 	}
 

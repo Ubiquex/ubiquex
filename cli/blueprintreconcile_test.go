@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ubiquex/ubiquex/blueprint"
+	"github.com/ubiquex/ubiquex/core"
 )
 
 // renderReconcile runs the renderer with colour off, as a pipe would.
@@ -214,5 +217,153 @@ func TestWriteBlueprintReconcile_SaysWhereItLooked(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report does not say it looked in %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestReconcile_PairsOnContentHashAcrossDifferentNames is the regression
+// test for a double report found by walking a real HCL stack.
+//
+// One blueprint appeared as two problems: missing under the ledger's
+// name, unused under the lock's. Same source, same bytes, two names.
+//
+// A ledger ref carries the blueprint's own PACKAGED name, from its
+// blueprint.lock.json. A lock entry is keyed by the name the CALL used,
+// derived from the source's last path segment. For an OCI repository
+// called rev-bp holding a blueprint packaged as bp, those differ, and
+// the report had no way to know they were one thing.
+func TestReconcile_PairsOnContentHashAcrossDifferentNames(t *testing.T) {
+	l := core.Open(t.TempDir())
+	addr := core.Address{Stack: "payments", Type: "aws_sqs_queue", Name: "q"}
+	const (
+		hash   = "sha256:aaa111bbb222"
+		source = "oci://ghcr.io/ubx-blueprints/rev-bp:v1.0.0"
+	)
+	// The ledger records the PACKAGED name.
+	seedAdoptionWithSource(t, l, addr, core.IntentSource{
+		Kind: "blueprint", Ref: "bp:" + hash,
+		Declaration: source, DeclaredSource: source,
+	})
+	// The lock records the CALLED name, for the same bytes.
+	declared := map[string]declaredSource{
+		"rev-bp": {Source: source, ContentHash: hash, FromLock: true},
+	}
+
+	head, err := l.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := reconcileBlueprints(l, head, "payments", declared)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if len(r.Missing) != 0 {
+		t.Errorf("a declared blueprint was reported missing under its packaged name: %+v", r.Missing)
+	}
+	if len(r.Extra) != 0 {
+		t.Errorf("the same blueprint was reported unused under its called name: %v", r.Extra)
+	}
+	if len(r.Differs) != 0 {
+		t.Errorf("the sources are identical, so nothing differs: %+v", r.Differs)
+	}
+	if !r.Empty() {
+		t.Errorf("one blueprint, declared and used, should produce no findings at all: %+v", r)
+	}
+}
+
+// TestReconcile_HashPairingStillReportsARealDifference: pairing must not
+// become a way of agreeing with everything. Two different hashes are a
+// real difference whatever the names are.
+func TestReconcile_HashPairingStillReportsARealDifference(t *testing.T) {
+	l := core.Open(t.TempDir())
+	addr := core.Address{Stack: "payments", Type: "aws_sqs_queue", Name: "q"}
+	seedAdoptionWithSource(t, l, addr, core.IntentSource{
+		Kind: "blueprint", Ref: "bp:sha256:oldbytes",
+		Declaration:    "oci://ghcr.io/ubx-blueprints/rev-bp:v1.0.0",
+		DeclaredSource: "oci://ghcr.io/ubx-blueprints/rev-bp:v1.0.0",
+	})
+	declared := map[string]declaredSource{
+		"rev-bp": {Source: "oci://ghcr.io/ubx-blueprints/rev-bp:v2.0.0", ContentHash: "sha256:newbytes", FromLock: true},
+	}
+
+	head, err := l.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := reconcileBlueprints(l, head, "payments", declared)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	// The hashes do not pair, so this falls back to the name, and the two
+	// names do not match either. That is honestly reported as a head
+	// using something the stack does not declare, plus a declaration the
+	// head never used, because from the data available that is exactly
+	// what it is.
+	if len(r.Missing) != 1 || len(r.Extra) != 1 {
+		t.Fatalf("a genuinely different artifact must still be reported: missing=%+v extra=%v differs=%+v",
+			r.Missing, r.Extra, r.Differs)
+	}
+}
+
+// TestReconcile_TableDeclarationsStillPairByName: a table-declared
+// blueprint carries no hash and needs none, because resolveOne REQUIRES
+// the pulled blueprint's packaged name to match the declared one. Those
+// two names cannot differ, so the name is an exact key there.
+func TestReconcile_TableDeclarationsStillPairByName(t *testing.T) {
+	l := core.Open(t.TempDir())
+	addr := core.Address{Stack: "payments", Type: "aws_sqs_queue", Name: "q"}
+	seedAdoptionWithSource(t, l, addr, core.IntentSource{
+		Kind: "blueprint", Ref: "ci-platform:sha256:abc",
+		Declaration: "oci://ghcr.io/x/ci:v2", DeclaredSource: "oci://ghcr.io/x/ci:v2",
+	})
+	declared := map[string]declaredSource{
+		"ci-platform": {Source: "oci://ghcr.io/x/ci:v2"}, // no hash: from the config table
+	}
+
+	head, err := l.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := reconcileBlueprints(l, head, "payments", declared)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if !r.Empty() {
+		t.Errorf("a table-declared blueprint in use should produce no findings: %+v", r)
+	}
+}
+
+// seedAdoptionWithSource records one resource carrying the given
+// provenance, so a reconciliation has a real folded head to read rather
+// than a hand-built result value.
+func seedAdoptionWithSource(t *testing.T, l *core.Ledger, addr core.Address, src core.IntentSource) {
+	t.Helper()
+	state := json.RawMessage(`{"id":"q-1"}`)
+	node, err := json.Marshal(map[string]interface{}{
+		"stack": addr.Stack, "type": addr.Type, "name": addr.Name,
+		"state": state, "sources": []core.IntentSource{src},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := core.ObservedHash(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := l.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := core.Accept(l, &core.Proposal{
+		SchemaVersion: core.SchemaVersion, Stack: addr.Stack, Parent: head,
+		Kind: core.KindAdoption, Intent: core.Intent{Summary: "seed " + addr.Name},
+		Delta: core.Delta{Creates: []json.RawMessage{node}},
+		Resolution: core.Resolution{ResolvedAt: now, Inputs: []core.ResolutionInput{
+			{Kind: "live_state", Resource: addr.String(), ObservedHash: hash, Lookup: json.RawMessage(`{"id":"q-1"}`)},
+		}},
+		CostDelta: core.CostDelta{MonthlyUSD: json.RawMessage(`0`)}, Status: core.StatusDraft,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
 }
