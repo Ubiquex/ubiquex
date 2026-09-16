@@ -66,8 +66,8 @@ func TestWriteBlueprintReconcile_ThinAnswerReadsAsThin(t *testing.T) {
 		Unknown: []blueprintUse{{Name: "ci-platform", Undeclared: 3}},
 	})
 	for _, want := range []string{
-		"before ubx recorded declarations", // what happened
-		"cannot be turned back into a source", // why it cannot be fixed by looking harder
+		"before ubx recorded declarations",        // what happened
+		"cannot be turned back into a source",     // why it cannot be fixed by looking harder
 		"unchecked rather than confirmed correct", // what the reader should conclude
 	} {
 		if !strings.Contains(out, want) {
