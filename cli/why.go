@@ -637,6 +637,7 @@ func renderIntentSource(out io.Writer, st *styler, s core.IntentSource, indent s
 			fmt.Fprintf(out, "%s%s blueprint %s:sha256:%s\n", indent, label, name, st.Hash(hash))
 		}
 		writeBlueprintDeclaration(out, indent, s)
+		writeBlueprintArgs(out, indent, s)
 		fmt.Fprintf(out, "%s  (this resource's own creation is signed by the CALLING stack's own acceptance below; "+
 			"the blueprint's own authorship has no separate signing ceremony in this build yet)\n", indent)
 	default:
@@ -775,4 +776,68 @@ func declaredParts(s core.IntentSource) string {
 	// A leading ", path ..." with no "at ..." before it reads as a
 	// fragment; make it a clause of its own.
 	return strings.TrimPrefix(b.String(), ",")
+}
+
+// writeBlueprintArgs renders what a blueprint call was made with
+// (UBI-287), beneath the declaration naming what was called.
+//
+// The ref says which bytes, the declaration says what asked for them,
+// and this says what they were given. The third is the one that changes
+// most often and the one a reader is most likely to be chasing: the same
+// blueprint at the same version with a different argument produces a
+// different result, and until UBI-287 the ledger recorded the result and
+// discarded the input that produced it.
+//
+// # Withheld is not absent, and the rendering says which
+//
+// An argument whose parameter is declared sensitive has its value
+// recorded nowhere, deliberately: a ledger entry cannot be edited, so a
+// credential written there is written forever. But the FACT that the
+// argument was given survives, and a reader needs those two apart.
+//
+// "This call passed nothing for api_token" and "this call passed
+// something for api_token that ubx will not repeat" are different
+// answers to the same question, and collapsing them would make a
+// credential's absence look like a parameter nobody set.
+func writeBlueprintArgs(out io.Writer, indent string, s core.IntentSource) {
+	if len(s.DeclaredArgs) > 0 {
+		names := make([]string, 0, len(s.DeclaredArgs))
+		for k := range s.DeclaredArgs {
+			names = append(names, k)
+		}
+		// Sorted: the stored map has no order of its own, and a listing
+		// that reshuffled between runs would read as change.
+		sort.Strings(names)
+		parts := make([]string, 0, len(names))
+		for _, n := range names {
+			parts = append(parts, fmt.Sprintf("%s = %q", n, s.DeclaredArgs[n]))
+		}
+		fmt.Fprintf(out, "%s  called with %s\n", indent, strings.Join(parts, ", "))
+	}
+	if len(s.WithheldArgs) == 0 {
+		return
+	}
+	// Named individually rather than counted. "1 argument withheld" tells
+	// a reader that something is missing without telling them what, which
+	// is the position this whole arc exists to get people out of.
+	fmt.Fprintf(out, "%s  %s %s declared sensitive, so %s value%s recorded\n",
+		indent, strings.Join(s.WithheldArgs, " and "),
+		pick(len(s.WithheldArgs), "was", "were"),
+		pick(len(s.WithheldArgs), "its", "their"),
+		pick(len(s.WithheldArgs), " was never", "s were never"))
+}
+
+// pick chooses between a singular and plural form. Named pick rather
+// than plural because this file already has a plural returning a bare
+// suffix, and two functions with one name differing only in arity is a
+// worse read than one extra word.
+//
+// The singular case is the common one here, and "1 argument were
+// withheld" would put a reader's attention on the tool rather than on
+// their own infrastructure.
+func pick(n int, singular, pluralForm string) string {
+	if n == 1 {
+		return singular
+	}
+	return pluralForm
 }
