@@ -357,6 +357,18 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 			st := newStyler(cmd)
 			fmt.Fprintf(outWriter, "restoring %s -> ledger head %s\n", restoreStack, st.Hash(targetHead))
 			renderPlanReceipt(outWriter, st, p, planReceiptHeader(st, p.Stack, ""), true)
+			// On the receipt rather than behind a flag. The failure this
+			// warns about is that the restore succeeds and the next `ubx
+			// plan` quietly undoes it, so it belongs where someone will
+			// hit it, not where they would have to know to look for it.
+			//
+			// Never fatal: a reconciliation that could not be computed
+			// must not cost someone a restore they already resolved.
+			if rec, rerr := reconcileBlueprints(ledger, targetHead, restoreStack, cfg.Blueprints); rerr == nil {
+				writeBlueprintReconcile(outWriter, st, rec)
+			} else {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not compare this head's blueprints against your table: %v\n", rerr)
+			}
 			fmt.Fprintf(outWriter, "\nplan: %s\nubx-proposal: %s\nnext: %s\n", planPath, st.Blue(hash), nextShipHint([]string{hash}, p.BlastRadius.Destroys > 0))
 			return nil
 		},
