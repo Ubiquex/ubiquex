@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core"
 )
 
@@ -67,8 +68,14 @@ type blueprintReconcile struct {
 
 type blueprintDiff struct {
 	Name     string
-	Declared string // what the table says now
+	Declared string // what the stack declares now
 	Used     string // what the head actually used
+	// FromLock records that the declaration was found in the stack lock
+	// rather than the config table, which is how an inline HCL
+	// declaration reaches this report. It changes the wording only: a
+	// reader told "your table says" about a stack with no table would go
+	// looking in the wrong file.
+	FromLock bool
 }
 
 // Empty reports whether there is nothing at all to say.
@@ -146,9 +153,63 @@ func blueprintsUsedAt(l *core.Ledger, headID, stack string) (map[string]*bluepri
 	return used, nil
 }
 
-// reconcileBlueprints compares a head's own usage against the table the
-// stack declares right now.
-func reconcileBlueprints(l *core.Ledger, headID, stack string, table map[string]string) (blueprintReconcile, error) {
+// declaredSource is one blueprint this stack declares, and where the
+// declaration was found.
+type declaredSource struct {
+	Source string
+	// FromLock is true when the config table had no entry and the stack
+	// lock did, which is what an HCL stack declaring inline looks like
+	// from here.
+	FromLock bool
+}
+
+// stackDeclarations is everything this stack declares, from both places a
+// declaration can live.
+//
+// The config table is not the only declaration site, which this report
+// originally assumed and was wrong about. An HCL stack declares a
+// blueprint inline on the block itself, with source/version/path
+// attributes and no table entry at all, and `ubx restore` never sees that
+// file: it is handed a head, not a document.
+//
+// What it can see is .ubx/blueprints.lock, which records what every
+// remote call resolved to, keyed by stack and name, regardless of where
+// the declaration was written. So the lock is what makes an inline
+// declaration visible here.
+//
+// Reading only the table meant an HCL stack declaring inline had EVERY
+// blueprint reported as a missing entry, advising a reader to add
+// something already present. That is the one line this report cannot be
+// wrong about without being actively misleading, since "add an entry" is
+// advice someone acts on.
+//
+// A local inline call is absent from both and is correctly never
+// reported: it records no declaration in the first place, because a path
+// is not a reference that can be repointed and there is no table entry
+// behind it to reconcile.
+func stackDeclarations(table map[string]string, lock *blueprint.StackLock, stack string) map[string]declaredSource {
+	out := make(map[string]declaredSource, len(table))
+	for name, src := range table {
+		out[name] = declaredSource{Source: src}
+	}
+	if lock == nil {
+		return out
+	}
+	for name, entry := range lock.Stacks[stack] {
+		if _, inTable := out[name]; inTable {
+			// The table is the declaration site a reader edits, so it
+			// stays authoritative for what to compare against. The lock
+			// only fills in names the table does not mention.
+			continue
+		}
+		out[name] = declaredSource{Source: entry.Source, FromLock: true}
+	}
+	return out
+}
+
+// reconcileBlueprints compares a head's own usage against what the stack
+// declares right now, from both declaration sites.
+func reconcileBlueprints(l *core.Ledger, headID, stack string, declared map[string]declaredSource) (blueprintReconcile, error) {
 	used, err := blueprintsUsedAt(l, headID, stack)
 	if err != nil {
 		return blueprintReconcile{}, err
@@ -163,7 +224,7 @@ func reconcileBlueprints(l *core.Ledger, headID, stack string, table map[string]
 
 	for _, n := range names {
 		u := used[n]
-		declared, inTable := table[n]
+		decl, inTable := declared[n]
 		switch {
 		case len(u.Declarations) > 1:
 			// Reported rather than resolved: no single entry reproduces
@@ -180,12 +241,12 @@ func reconcileBlueprints(l *core.Ledger, headID, stack string, table map[string]
 			}
 		case !inTable:
 			r.Missing = append(r.Missing, *u)
-		case declared != u.Declarations[0]:
-			r.Differs = append(r.Differs, blueprintDiff{Name: n, Declared: declared, Used: u.Declarations[0]})
+		case decl.Source != u.Declarations[0]:
+			r.Differs = append(r.Differs, blueprintDiff{Name: n, Declared: decl.Source, Used: u.Declarations[0], FromLock: decl.FromLock})
 		}
 	}
 
-	for n := range table {
+	for n := range declared {
 		if used[n] == nil {
 			r.Extra = append(r.Extra, n)
 		}
@@ -217,14 +278,22 @@ func writeBlueprintReconcile(w io.Writer, st *styler, r blueprintReconcile) {
 	// and ignores ANSI escapes, which plain width arithmetic does not.
 	nameCol := reconcileNameWidth(r)
 	for _, d := range r.Differs {
-		fmt.Fprintf(w, "  %s  table says %s, this head used %s\n", padStyled(st.Yellow(d.Name), nameCol), d.Declared, d.Used)
+		// Named by where the declaration actually is. A reader whose
+		// stack declares inline has no blueprints table, and telling them
+		// "your table says" sends them to a file that does not mention
+		// this blueprint at all.
+		where := "your table says"
+		if d.FromLock {
+			where = "your stack declares"
+		}
+		fmt.Fprintf(w, "  %s  %s %s, this head used %s\n", padStyled(st.Yellow(d.Name), nameCol), where, d.Declared, d.Used)
 	}
 	for _, m := range r.Missing {
 		if len(m.Declarations) > 0 {
-			fmt.Fprintf(w, "  %s  this head used %s, your table has no entry\n", padStyled(st.Yellow(m.Name), nameCol), m.Declarations[0])
+			fmt.Fprintf(w, "  %s  this head used %s, and nothing this stack declares mentions it\n", padStyled(st.Yellow(m.Name), nameCol), m.Declarations[0])
 			continue
 		}
-		fmt.Fprintf(w, "  %s  this head used it, your table has no entry (source not recorded, see below)\n", padStyled(st.Yellow(m.Name), nameCol))
+		fmt.Fprintf(w, "  %s  this head used it, and nothing this stack declares mentions it (source not recorded, see below)\n", padStyled(st.Yellow(m.Name), nameCol))
 	}
 	for _, e := range r.Extra {
 		fmt.Fprintf(w, "  %s  your table declares it, this head never used it\n", padStyled(st.Yellow(e), nameCol))
@@ -245,6 +314,8 @@ func writeBlueprintReconcile(w io.Writer, st *styler, r blueprintReconcile) {
 	}
 	fmt.Fprintf(w, "\n  nothing is edited for you: the entry a dropped blueprint needs is the one\n"+
 		"  the config cascade cannot say which file should own.\n\n")
+	fmt.Fprintf(w, "  looked in: .ubx/config's blueprints table, and .ubx/blueprints.lock, which\n"+
+		"  is where a blueprint declared inline on an HCL block shows up.\n")
 	writeReconcileScope(w)
 }
 
