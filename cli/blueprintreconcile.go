@@ -417,8 +417,18 @@ func writeBlueprintReconcile(w io.Writer, st *styler, r blueprintReconcile) {
 		fmt.Fprintf(w, "  a content hash names bytes and cannot be turned back into a source, so this is\n"+
 			"  not a clean result: those entries are unchecked rather than confirmed correct.\n")
 	}
-	fmt.Fprintf(w, "\n  nothing is edited for you: the entry a dropped blueprint needs is the one\n"+
-		"  the config cascade cannot say which file should own.\n\n")
+	// "Nothing is edited" is true of every report. WHY nothing is edited
+	// is only interesting when the reader is looking at the case that
+	// cannot be edited, and printing the dropped-blueprint explanation
+	// beside a plain version mismatch describes a situation that is not
+	// on the screen. A reader then looks for the dropped blueprint the
+	// text is about and there is not one.
+	if len(r.Missing) > 0 {
+		fmt.Fprintf(w, "\n  nothing is edited for you: the entry a dropped blueprint needs is the one\n"+
+			"  the config cascade cannot say which file should own.\n\n")
+	} else {
+		fmt.Fprintf(w, "\n  nothing is edited for you.\n\n")
+	}
 	fmt.Fprintf(w, "  looked in: .ubx/config's blueprints table, and .ubx/blueprints.lock, which\n"+
 		"  is where a blueprint declared inline on an HCL block shows up.\n")
 	writeReconcileScope(w)
