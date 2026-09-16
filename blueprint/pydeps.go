@@ -495,13 +495,13 @@ func pyEvalDeps(mounts []PyDepMount) []pyeval.ExtraDep {
 // sdk.push_blueprint_source call may have left behind. Empty (never nil)
 // when entryFile has no requirements.txt at all -- the common case pays
 // nothing extra to build or consult this map.
-func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte, receipts []string, refs map[string]string, err error) {
+func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte, receipts []string, refs map[string]BlueprintProvenance, err error) {
 	mounts, notes, err := ResolvePyDependencies(ctx, entryFile)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	receipts = make([]string, 0, len(mounts)+len(notes))
-	refs = map[string]string{}
+	refs = map[string]BlueprintProvenance{}
 
 	// UBI-266: every blueprint whose code this program can reach, from
 	// both directions. A declared dependency is already resolved above,
@@ -510,7 +510,10 @@ func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte
 	var roots []pyeval.BlueprintRoot
 	for _, m := range mounts {
 		receipts = append(receipts, m.Receipt)
-		refs[m.Dep.Name] = m.Ref
+		// The declaration travels with the ref: a declared Python
+		// blueprint is named in requirements.txt, and that entry is what
+		// asked for these bytes.
+		refs[m.Dep.Name] = BlueprintProvenance{Ref: m.Ref, Dep: m.Dep}
 		roots = append(roots, pyeval.BlueprintRoot{HostDir: m.HostDir, Name: m.Dep.Name})
 	}
 	// Whole-resolution notes print alongside the per-dependency
@@ -529,7 +532,9 @@ func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte
 			// PYTHONPATH ahead of the program's own directory.
 			continue
 		}
-		refs[r.Name] = r.Ref
+		// Discovered rather than declared, so no declaration: a blueprint
+		// found by walking the tree was never named in requirements.txt.
+		refs[r.Name] = BlueprintProvenance{Ref: r.Ref}
 		roots = append(roots, pyeval.BlueprintRoot{HostDir: r.Dir, Name: r.Name})
 	}
 
@@ -555,7 +560,7 @@ func EvaluatePythonWithDeps(ctx context.Context, entryFile string) (canon []byte
 // "standalone published module, not supported yet" boundary does, rather
 // than a silent, permanently-incomplete ref: a real, honest limitation,
 // not a gap this fix pretends to close.
-func StampDirectCallProvenancePy(intent *resolver.IntentFile, refs map[string]string) error {
+func StampDirectCallProvenancePy(intent *resolver.IntentFile, refs map[string]BlueprintProvenance) error {
 	if len(pendingBlueprintNames(intent)) == 0 {
 		return nil
 	}

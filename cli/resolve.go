@@ -320,7 +320,7 @@ trailer hash, or "ubx accept" directly, exactly like a proposal ubx scan generat
 // never through this shared dispatch function) since neither needs
 // anything ELSE this function already computed the way Python's own
 // already-resolved dependency hashes are.
-func evaluateSDKProgram(ctx context.Context, entryFile string) (canon []byte, receipts []string, blueprintRefs map[string]string, err error) {
+func evaluateSDKProgram(ctx context.Context, entryFile string) (canon []byte, receipts []string, blueprintRefs map[string]blueprint.BlueprintProvenance, err error) {
 	switch strings.ToLower(filepath.Ext(entryFile)) {
 	case ".go":
 		return blueprint.EvaluateGoWithBlueprints(ctx, entryFile)

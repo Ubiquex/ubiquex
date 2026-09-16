@@ -77,7 +77,7 @@ type denoInfoOutput struct {
 // name (Ubxfile-bearing directory's own basename -- the SAME derivation
 // buildManifest/Package/Verify already use) -> full "name:content_hash"
 // ref.
-func discoverImportedBlueprintsTS(ctx context.Context, entryFile string) (map[string]string, error) {
+func discoverImportedBlueprintsTS(ctx context.Context, entryFile string) (map[string]BlueprintProvenance, error) {
 	roots, err := DiscoverTSBlueprintRoots(ctx, entryFile)
 	if err != nil {
 		return nil, err

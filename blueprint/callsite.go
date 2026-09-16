@@ -78,6 +78,22 @@ type BlueprintRoot struct {
 	// "<name>:sha256:<hex>" the stamping pass needs.
 	Dir string `json:"-"`
 	Ref string `json:"-"`
+
+	// Dep is the declaration this root resolved from, host-side only
+	// (UBI-282 follow-up).
+	//
+	// Carried because the direct SDK calling path had no other route to
+	// it. A resource produced by a program that calls a declared
+	// blueprint gets its provenance completed by applyBlueprintRefs,
+	// which knew a name and a content hash and nothing about what asked
+	// for those bytes. So an SDK-called blueprint recorded a ref with no
+	// declaration, and `ubx why` reported it as a proposal resolved
+	// before declarations existed, which it was not.
+	//
+	// Zero for a DISCOVERED root, correctly: a blueprint found by walking
+	// the module graph was never named in a blueprints table, so there is
+	// no table entry to quote, exactly as an inline HCL call has none.
+	Dep Declaration `json:"-"`
 }
 
 // BlueprintRootManifest is what a runtime is handed: Match and Name
@@ -122,12 +138,25 @@ func EncodeBlueprintRootManifest(roots []BlueprintRoot) (string, error) {
 	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
-// blueprintRefs turns discovered roots into the name -> "<name>:<hash>"
-// map applyBlueprintRefs completes a document with.
-func blueprintRefs(roots []BlueprintRoot) map[string]string {
-	refs := make(map[string]string, len(roots))
+// BlueprintProvenance is everything the stamping pass needs about one
+// blueprint: what it resolved to, and what asked for it.
+//
+// A struct rather than the bare ref string it used to be, because the
+// ref alone is half the answer and the half that cannot be reversed into
+// the other. See BlueprintRoot.Dep.
+type BlueprintProvenance struct {
+	// Ref is the completed "<name>:sha256:<hex>".
+	Ref string
+	// Dep is the declaration, zero for a discovered root.
+	Dep Declaration
+}
+
+// blueprintRefs turns roots into the name -> provenance map
+// applyBlueprintRefs completes a document with.
+func blueprintRefs(roots []BlueprintRoot) map[string]BlueprintProvenance {
+	refs := make(map[string]BlueprintProvenance, len(roots))
 	for _, r := range roots {
-		refs[r.Name] = r.Ref
+		refs[r.Name] = BlueprintProvenance{Ref: r.Ref, Dep: r.Dep}
 	}
 	return refs
 }
@@ -141,7 +170,7 @@ func blueprintRefs(roots []BlueprintRoot) map[string]string {
 // It has to: the runtime cannot attribute a call to a blueprint it was
 // never told about. The same discovery result serves both ends, so the
 // module graph is still walked exactly once per evaluation.
-func EvaluateGoWithBlueprints(ctx context.Context, entryFile string) ([]byte, []string, map[string]string, error) {
+func EvaluateGoWithBlueprints(ctx context.Context, entryFile string) ([]byte, []string, map[string]BlueprintProvenance, error) {
 	// Declared blueprints first: they are fetched, verified and mounted
 	// before the program runs, exactly as Python's have been. Their roots
 	// join the discovered ones, so a resource created inside a declared
@@ -162,6 +191,7 @@ func EvaluateGoWithBlueprints(ctx context.Context, entryFile string) ([]byte, []
 			Name:  d.Dep.Name,
 			Dir:   d.Dir,
 			Ref:   d.Ref,
+			Dep:   d.Dep,
 		})
 	}
 	receipts = append(receipts, notes...)
@@ -207,7 +237,7 @@ func mustEncodeRoots(roots []BlueprintRoot) string {
 // EvaluateTSWithBlueprints is EvaluateGoWithBlueprints' TypeScript
 // sibling, the same sequence against the same contract: discover, hand
 // the roots to the runtime, evaluate, complete the bare names.
-func EvaluateTSWithBlueprints(ctx context.Context, entryFile string) ([]byte, []string, map[string]string, error) {
+func EvaluateTSWithBlueprints(ctx context.Context, entryFile string) ([]byte, []string, map[string]BlueprintProvenance, error) {
 	declared, notes, err := ResolveTSDependencies(ctx, entryFile)
 	if err != nil {
 		return nil, nil, nil, err
@@ -236,6 +266,7 @@ func EvaluateTSWithBlueprints(ctx context.Context, entryFile string) ([]byte, []
 			Name:  d.Dep.Name,
 			Dir:   d.EvalDir,
 			Ref:   d.Ref,
+			Dep:   d.Dep,
 		})
 	}
 	receipts = append(receipts, notes...)
@@ -343,7 +374,7 @@ func DiscoverPyBlueprintRoots(entryFile string) ([]BlueprintRoot, error) {
 // EvaluateGoWithBlueprints and EvaluateTSWithBlueprints already return
 // the merged map, declared and discovered together, so stamping from it
 // is both correct and one pass rather than two.
-func StampDirectCallProvenanceRefs(intent *resolver.IntentFile, refs map[string]string, lang string) error {
+func StampDirectCallProvenanceRefs(intent *resolver.IntentFile, refs map[string]BlueprintProvenance, lang string) error {
 	if len(pendingBlueprintNames(intent)) == 0 {
 		return nil
 	}
