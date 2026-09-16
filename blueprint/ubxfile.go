@@ -354,6 +354,18 @@ func parseParamSpec(name, spec string) (Param, error) {
 
 	rest = strings.TrimSpace(rest)
 	p := Param{Name: name, Type: typ}
+
+	// "sensitive" is a trailing clause on top of required/default rather
+	// than a replacement for either, so a parameter always still says
+	// whether it must be given.
+	if trimmed, ok := strings.CutSuffix(rest, ",sensitive"); ok {
+		p.Sensitive, rest = true, strings.TrimSpace(trimmed)
+	} else if trimmed, ok := strings.CutSuffix(rest, ", sensitive"); ok {
+		p.Sensitive, rest = true, strings.TrimSpace(trimmed)
+	} else if rest == "sensitive" {
+		return Param{}, fmt.Errorf(`"sensitive" is an addition to "required", not a replacement for it -- write "%s, required, sensitive"`, typ)
+	}
+
 	switch {
 	case rest == "required":
 		p.Required = true
@@ -366,6 +378,16 @@ func parseParamSpec(name, spec string) (Param, error) {
 		p.Default = v
 	default:
 		return Param{}, fmt.Errorf(`expected "required" or "default <value>" after the type, got %q`, rest)
+	}
+
+	// Refused at parse time, which is package time, rather than warned
+	// about. An Ubxfile ships inside the packaged artifact, so a default
+	// IS distributed: a sensitive parameter with one hands the credential
+	// to everyone who pulls the blueprint, and it leaks without anything
+	// being run. That is strictly worse than the ledger case this flag
+	// exists to prevent, so it cannot be left to a reader's judgement.
+	if p.Sensitive && p.Default != nil {
+		return Param{}, fmt.Errorf(`a sensitive param cannot have a default: the Ubxfile ships inside the packaged blueprint, so the default would be distributed to everyone who pulls it -- declare it "%s, required, sensitive"`, typ)
 	}
 	return p, nil
 }

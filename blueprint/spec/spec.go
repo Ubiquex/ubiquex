@@ -175,6 +175,31 @@ type Param struct {
 	// Default holds the parsed default value (string, int, or bool,
 	// matching Type) when !Required; nil when Required.
 	Default any
+
+	// Sensitive marks a parameter whose argument carries a credential
+	// (UBI-289). Written as a trailing clause: "string, required,
+	// sensitive".
+	//
+	// It is a RECORDING concern and nothing else. It says what may be
+	// written down about an argument, never what a blueprint may do with
+	// one. A blueprint receives a sensitive argument exactly as it
+	// receives any other, uses it however it likes, and no check
+	// constrains that. Stated rather than left to be inferred, because
+	// the name invites the broader reading and the broader reading is not
+	// what this does.
+	//
+	// The narrow scope is deliberate. Constraining use would mean tracing
+	// a value through a blueprint written in three languages, which
+	// nothing here can do, and a flag that half-constrained use would be
+	// worse than one that plainly does not.
+	//
+	// A sensitive parameter may not have a default. ParseUbxfile refuses
+	// the combination: a default is written in the Ubxfile, the Ubxfile
+	// ships inside the packaged artifact, so a sensitive default would
+	// hand the credential to everyone who pulls the blueprint. That leaks
+	// without anything being run, which is worse than the ledger case
+	// this flag exists for.
+	Sensitive bool
 }
 
 // Output is one outputs: entry (UBI-128), in the Ubxfile's own
