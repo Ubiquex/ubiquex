@@ -427,7 +427,7 @@ func TestWriteBlueprintReconcile_DroppedExplanationOnlyWhenDropped(t *testing.T)
 	dropped := renderReconcile(t, blueprintReconcile{UsedAll: 1, Missing: []blueprintUse{
 		{Name: "network", Declarations: []string{"oci://x/net:v1"}},
 	}})
-	for _, want := range []string{"dropped blueprint", "which file should own"} {
+	for _, want := range []string{"unmanaged", "which file should own"} {
 		if !strings.Contains(dropped, want) {
 			t.Errorf("the case the explanation is for does not carry it, missing %q:\n%s", want, dropped)
 		}
@@ -472,6 +472,55 @@ func TestWriteBlueprintReconcile_DoesNotClaimArgumentsAreUnrecorded(t *testing.T
 	for _, stale := range []string{"records\n  its result and not its arguments", "not its arguments"} {
 		if strings.Contains(out, stale) {
 			t.Errorf("the report still explains arguments as unrecorded, which is false for an HCL call:\n%s", out)
+		}
+	}
+}
+
+// TestWriteBlueprintReconcile_UnmanagedIsNotAMismatch: the two findings
+// need different advice, so they are not listed together under one
+// heading.
+//
+// A declaration that moved is a mismatch: change your declaration and the
+// next plan agrees. A blueprint nothing declares is not a mismatch at
+// all. Its resources still exist, nothing will remove them, and the
+// question is whether they should be there. A reader who reads the second
+// as the first edits a version and changes nothing.
+func TestWriteBlueprintReconcile_UnmanagedIsNotAMismatch(t *testing.T) {
+	out := renderReconcile(t, blueprintReconcile{
+		UsedAll: 2,
+		Differs: []blueprintDiff{{Name: "ci-platform", Declared: "oci://x/ci:v2", Used: "oci://x/ci:v1"}},
+		Missing: []blueprintUse{{Name: "network", Declarations: []string{"oci://x/net:v1"}}},
+	})
+
+	for _, want := range []string{
+		"their resources are unmanaged",                       // what the state is
+		"Deleting a declaration does not delete what it made", // why it is not fixed by editing
+		"ubx terminate", // the only thing that removes them
+		"Doing nothing leaves them in place and unmanaged", // and that inaction is a choice
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the unmanaged case does not say %q:\n%s", want, out)
+		}
+	}
+
+	// The two findings must not read as one list, since the advice differs.
+	unmanagedHeading := strings.Index(out, "their resources are unmanaged")
+	mismatch := strings.Index(out, "ci-platform")
+	if unmanagedHeading < 0 || mismatch < 0 || mismatch > unmanagedHeading {
+		t.Errorf("the version mismatch is not separated from the unmanaged block:\n%s", out)
+	}
+}
+
+// TestWriteBlueprintReconcile_NoUnmanagedBlockWithoutOne: a report with
+// only a version difference must not print advice about resources nobody
+// stopped declaring.
+func TestWriteBlueprintReconcile_NoUnmanagedBlockWithoutOne(t *testing.T) {
+	out := renderReconcile(t, blueprintReconcile{UsedAll: 1, Differs: []blueprintDiff{
+		{Name: "ci-platform", Declared: "oci://x/ci:v2", Used: "oci://x/ci:v1"},
+	}})
+	for _, absent := range []string{"unmanaged", "ubx terminate", "does not delete"} {
+		if strings.Contains(out, absent) {
+			t.Errorf("a version difference mentions %q:\n%s", absent, out)
 		}
 	}
 }

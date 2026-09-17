@@ -383,6 +383,15 @@ func writeBlueprintReconcile(w io.Writer, st *styler, r blueprintReconcile) {
 	// mention this blueprint. Same error the missing-entry line made
 	// before it learned to read both places.
 	fmt.Fprintf(w, "\nblueprints: what this stack declares does not match what this head used\n")
+	// Two findings, two kinds of advice, so they are separated rather
+	// than listed together under one heading.
+	//
+	// A declaration that MOVED is a mismatch: change your declaration and
+	// the next plan agrees. A blueprint NOTHING declares is not a
+	// mismatch at all, it is unmanaged, and the question is whether its
+	// resources should exist. Nothing removes them by dropping a
+	// declaration, deliberately and permanently, so a reader who reads
+	// this as a version problem will edit a version and change nothing.
 	// One column for the names, so the lines read as a table rather than
 	// as prose that happens to start with a name. padStyled counts runes
 	// and ignores ANSI escapes, which plain width arithmetic does not.
@@ -398,12 +407,24 @@ func writeBlueprintReconcile(w io.Writer, st *styler, r blueprintReconcile) {
 		}
 		fmt.Fprintf(w, "  %s  %s %s, this head used %s\n", padStyled(st.Yellow(d.Name), nameCol), where, d.Declared, d.Used)
 	}
-	for _, m := range r.Missing {
-		if len(m.Declarations) > 0 {
-			fmt.Fprintf(w, "  %s  this head used %s, and nothing this stack declares mentions it\n", padStyled(st.Yellow(m.Name), nameCol), m.Declarations[0])
-			continue
+	if len(r.Missing) > 0 {
+		fmt.Fprintf(w, "\n  nothing this stack declares mentions these, so their resources are unmanaged:\n")
+		for _, m := range r.Missing {
+			if len(m.Declarations) > 0 {
+				fmt.Fprintf(w, "    %s  this head used %s\n", padStyled(st.Yellow(m.Name), nameCol), m.Declarations[0])
+				continue
+			}
+			fmt.Fprintf(w, "    %s  this head used it (source not recorded, see below)\n", padStyled(st.Yellow(m.Name), nameCol))
 		}
-		fmt.Fprintf(w, "  %s  this head used it, and nothing this stack declares mentions it (source not recorded, see below)\n", padStyled(st.Yellow(m.Name), nameCol))
+		// The question, not the fix, because the fix depends on an answer
+		// only the reader has. Dropping a declaration never removes a
+		// resource, so "add it back" and "leave it" are both real choices
+		// and neither is the default.
+		fmt.Fprintf(w, "\n  Deleting a declaration does not delete what it made. Decide whether these\n"+
+			"  should exist: declare them again to manage them, or `ubx terminate` by address\n"+
+			"  to remove them. Doing nothing leaves them in place and unmanaged.\n\n"+
+			"  ubx does not add the entry for you, because the config cascade cannot say\n"+
+			"  which file should own one that does not exist yet.\n")
 	}
 	for _, e := range r.Extra {
 		fmt.Fprintf(w, "  %s  your table declares it, this head never used it\n", padStyled(st.Yellow(e), nameCol))
@@ -428,12 +449,10 @@ func writeBlueprintReconcile(w io.Writer, st *styler, r blueprintReconcile) {
 	// beside a plain version mismatch describes a situation that is not
 	// on the screen. A reader then looks for the dropped blueprint the
 	// text is about and there is not one.
-	if len(r.Missing) > 0 {
-		fmt.Fprintf(w, "\n  nothing is edited for you: the entry a dropped blueprint needs is the one\n"+
-			"  the config cascade cannot say which file should own.\n\n")
-	} else {
-		fmt.Fprintf(w, "\n  nothing is edited for you.\n\n")
-	}
+	// Always short now. Why nothing is edited for a dropped blueprint is
+	// said in the unmanaged block above, beside the decision it belongs
+	// to, rather than a second time as a standalone paragraph.
+	fmt.Fprintf(w, "\n  nothing is edited for you.\n\n")
 	fmt.Fprintf(w, "  looked in: .ubx/config's blueprints table, and .ubx/blueprints.lock, which\n"+
 		"  is where a blueprint declared inline on an HCL block shows up.\n")
 	writeReconcileScope(w)
