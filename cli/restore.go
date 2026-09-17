@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"time"
@@ -377,6 +378,7 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 			declared := stackDeclarations(cfg.Blueprints, stackLock, restoreStack)
 			if rec, rerr := reconcileBlueprints(ledger, targetHead, restoreStack, declared); rerr == nil {
 				writeBlueprintReconcile(outWriter, st, rec)
+				writeNothingToRestoreNote(outWriter, p, rec)
 			} else {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: could not compare this head's blueprints against your table: %v\n", rerr)
 			}
@@ -394,4 +396,40 @@ the result is saved as a hash-addressed plan file under .ubx/plans/, ready for
 	cmd.Flags().DurationVar(&timeout, "timeout", 2*time.Minute, "timeout for provider acquisition and schema fetch")
 	cmd.Flags().StringArrayVar(&knownDependents, "known-dependent", nil, "ledger_dir of a neighbor stack to check for cross-stack orphan references before destroying (repeatable; adds to .ubx/config's own known_dependents list rather than replacing it)")
 	return cmd
+}
+
+// writeNothingToRestoreNote explains an empty delta that arrives beside a
+// reported difference.
+//
+// A restore that proposes nothing is the worst failure this feature can
+// have, so the two ways it can happen must be distinguishable from the
+// output rather than from reading the code:
+//
+//   - the change this would undo never shipped, so the ledger already
+//     holds the target head's own shape and there is genuinely nothing to
+//     move
+//   - the change did ship and the restore failed to notice, which is a bug
+//
+// From a receipt those look identical, and the reconciliation above makes
+// it worse rather than better: it reports a real declaration difference,
+// and the delta underneath says +0 ~0 -0, which reads as a contradiction.
+// Both are correct, because they answer different questions. One compares
+// declarations, the other compares recorded state, and a declaration can
+// move long before anything ships.
+//
+// So the note says what the empty delta means. It does not assert why,
+// because the reasons are not distinguishable from here: an unshipped
+// change is the usual one, and a version whose output happens to be
+// identical is another.
+func writeNothingToRestoreNote(out io.Writer, p *core.Proposal, rec blueprintReconcile) {
+	if rec.Empty() {
+		return
+	}
+	if len(p.Delta.Creates) > 0 || len(p.Delta.Modifies) > 0 || len(p.Delta.Destroys) > 0 {
+		return
+	}
+	fmt.Fprintf(out, "\n  The delta above is empty even though a declaration differs, and both are\n"+
+		"  correct: this stack's recorded shape already matches this head, so there is\n"+
+		"  nothing to move back. A declaration can differ long before anything ships.\n"+
+		"  Most often that means the change was planned or accepted and never shipped.\n")
 }
