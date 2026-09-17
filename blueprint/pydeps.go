@@ -338,9 +338,9 @@ func finishLockPolicy(p LockPolicy, lock *StackLock, deps []PyDependency, supers
 	for _, d := range deps {
 		declared[d.Name] = d.URL
 	}
-	for _, name := range lock.Prune(p.Stack, declared) {
-		notes = append(notes, fmt.Sprintf("dropped %s from %s: stack %q no longer declares it", name, StackLockFileName, p.Stack))
-	}
+	// Not just that the entry went, but what it left behind: see
+	// lockdrop.go for why this is the one place both halves are in hand.
+	notes = append(notes, dropNotes(p.LedgerDir, p.Stack, lock.Prune(p.Stack, declared))...)
 	return notes, lock.Save(p.LedgerDir)
 }
 
