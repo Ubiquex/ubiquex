@@ -211,7 +211,7 @@ func TestRestore_ReconcilesTheWholeTable(t *testing.T) {
 		"ci-platform", "table says oci://ghcr.io/ubx-blueprints/ci-platform:v2",
 		"this head used oci://ghcr.io/ubx-blueprints/ci-platform:v1",
 		// missing, the motivating case
-		"network", "nothing this stack declares mentions it",
+		"network", "their resources are unmanaged", "Deleting a declaration does not delete what it made",
 		// extra
 		"legacy-vpc", "this head never used it",
 		// and the boundary, always
