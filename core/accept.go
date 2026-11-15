@@ -103,6 +103,65 @@ func AcceptFromReview(l *Ledger, p *Proposal, claimedHash string, review ReviewA
 	return accepted, nil
 }
 
+// MethodLoopback is Acceptance.Method for approval obtained on the local
+// MCP server's loopback page (UBI-294).
+const MethodLoopback = "loopback"
+
+// LoopbackApprover is the only value a loopback acceptance's Approvers
+// ever holds. It names what the channel attests, presence at this machine,
+// rather than an identity nobody verified.
+const LoopbackApprover = "loopback:presence"
+
+// AcceptFromLoopback is the loopback acceptance tier (UBI-294): a human clicked approve on a page the local server served on
+// loopback, which showed the bytes Ledger.StageRender stored under
+// renderedHash.
+//
+// Before appending it requires two things, and refuses rather than
+// records otherwise:
+//
+//   - The bytes are stored and hash to renderedHash (ErrRenderNotStored,
+//     ErrRenderedHashMismatch). An acceptance never names a render nobody
+//     kept.
+//   - p renders, now, to exactly those bytes (ErrRenderMismatch). Storage
+//     alone proves some render was kept; this proves it is a render of the
+//     proposal being accepted, so an approval given while looking at one
+//     proposal can never be attached to another.
+//
+// Nothing about who approved is recorded beyond LoopbackApprover. This
+// function is engine API and is never exposed as an MCP tool, the same
+// boundary by omission `ubx mcp` already keeps for accept and ship: an
+// agent cannot approve its own proposal through a tool that does not exist.
+func AcceptFromLoopback(l *Ledger, p *Proposal, renderedHash string) (*Proposal, error) {
+	hash, err := validateAndHash(p)
+	if err != nil {
+		return nil, fmt.Errorf("accept from loopback: %w", err)
+	}
+	if _, err := l.ReadRendered(renderedHash); err != nil {
+		if errors.Is(err, ErrStoreObjectNotFound) {
+			return nil, fmt.Errorf("accept from loopback: %w: %s", ErrRenderNotStored, renderedHash)
+		}
+		return nil, fmt.Errorf("accept from loopback: %w", err)
+	}
+	rendered, err := RenderProposal(p)
+	if err != nil {
+		return nil, fmt.Errorf("accept from loopback: %w", err)
+	}
+	if got := HashRendered(rendered); got != renderedHash {
+		return nil, fmt.Errorf("accept from loopback: %w: approved %s, proposal renders to %s",
+			ErrRenderMismatch, renderedHash, got)
+	}
+	accepted, err := finalizeAndAppend(l, p, hash, &Acceptance{
+		Method:       MethodLoopback,
+		Approvers:    []string{LoopbackApprover},
+		AcceptedAt:   time.Now().UTC().Format(time.RFC3339),
+		RenderedHash: renderedHash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("accept from loopback: %w", err)
+	}
+	return accepted, nil
+}
+
 // MergeAcceptance is AcceptFromMerge's already-verified input — everything
 // the caller (see package github, package gitlab, or package
 // azuredevops) derived from git history and the platform's own API

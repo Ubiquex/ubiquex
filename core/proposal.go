@@ -627,8 +627,32 @@ type InvariantCheck struct {
 // content the way every existing IntentSource kind is (dialogue, PR,
 // document, attribution match, promotion lineage). Additive/optional,
 // same hash-exclusion reasoning as every other Acceptance field.
+//
+// Method "loopback" and RenderedHash were added 2026-11-15 (docs/schema.md
+// -- "Amendment: rendered_hash and loopback acceptance", UBI-294): the
+// local MCP server's approval page, where a human approves a proposal an
+// agent authored. With an agent as author, the proposal hash proves the
+// applied change matches the approved one, but not what the human was
+// looking at, and the agent writes Intent.Summary itself. RenderedHash is
+// the SHA-256 of the exact bytes RenderProposal produced and the page
+// showed, stored retrievably by Ledger.StageRender before the acceptance
+// that names it is ever appended. Excluded from the content hash like
+// every other Acceptance field, and for the same reason twice over: it is
+// recorded after the hash exists, and it is derived FROM the hashed
+// content (the render is a view of it), so it could not be inside it
+// without a cycle. Additive and optional: a record without it reads
+// exactly as before, and since Acceptance is outside hashed content, a
+// binary predating this field that drops it on read still verifies the
+// chain (unlike Modification.Sources, UBI-285, which is hashed).
+//
+// A loopback acceptance's Approvers is always exactly [LoopbackApprover]
+// ("loopback:presence"): the channel attests that someone at this machine
+// clicked, and nothing about who. No OS username is recorded, because
+// nobody verified it. "local" keeps recording the OS user unchanged: a
+// human typed `ubx accept` in their own shell there, which is at least
+// weak evidence, and records already written keep their meaning.
 type Acceptance struct {
-	Method        string   `json:"method"`             // pr_merge | pr_review | local | crypto
+	Method        string   `json:"method"`             // pr_merge | pr_review | local | loopback ("crypto" was reserved here and never implemented)
 	Platform      string   `json:"platform,omitempty"` // github | gitlab | azure-devops -- only for method "pr_merge"/"pr_review"
 	MergeSHA      string   `json:"merge_sha,omitempty"`
 	PRNumber      int64    `json:"pr_number,omitempty"`
@@ -636,4 +660,5 @@ type Acceptance struct {
 	Approvers     []string `json:"approvers,omitempty"`
 	ReviewComment string   `json:"review_comment,omitempty"` // only for method "pr_review" -- the approving reviewer's own optional review body
 	AcceptedAt    string   `json:"accepted_at,omitempty"`
+	RenderedHash  string   `json:"rendered_hash,omitempty"` // only for method "loopback" -- SHA-256 of the exact bytes the approver was shown
 }

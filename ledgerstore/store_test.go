@@ -1,6 +1,7 @@
 package ledgerstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -486,3 +487,42 @@ func TestStore_SaltRace_ExactlyOneWinner(t *testing.T) {
 // .gitignore concept at all in this package; see gitLedgerStore's own
 // TestLedger_Salt_CreatesGitignore in core for the git-store-specific
 // behavior this deliberately does NOT have an equivalent of.)
+
+// TestStore_RenderedRoundTripAndCreateOnly: the blob store keeps rendered
+// bytes under rendered/, create-only, and a full stage-then-accept through
+// core.Ledger works against it (UBI-294).
+func TestStore_RenderedRoundTripAndCreateOnly(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if _, err := s.ReadRendered(ctx, strings.Repeat("a", 64)); !errors.Is(err, core.ErrStoreObjectNotFound) {
+		t.Fatalf("ReadRendered on empty store: got %v, want ErrStoreObjectNotFound", err)
+	}
+
+	l := core.OpenStore(s)
+	p := sampleProposal()
+	h, shown, err := l.StageRender(p)
+	if err != nil {
+		t.Fatalf("StageRender: %v", err)
+	}
+	if err := s.WriteRenderedIfAbsent(ctx, h, []byte("different")); !errors.Is(err, core.ErrStoreObjectExists) {
+		t.Fatalf("overwrite of a stored render: got %v, want ErrStoreObjectExists", err)
+	}
+	accepted, err := core.AcceptFromLoopback(l, p, h)
+	if err != nil {
+		t.Fatalf("AcceptFromLoopback: %v", err)
+	}
+	if accepted.Acceptance.RenderedHash != h {
+		t.Fatalf("RenderedHash = %q, want %q", accepted.Acceptance.RenderedHash, h)
+	}
+	stored, err := l.ReadRendered(h)
+	if err != nil {
+		t.Fatalf("ReadRendered: %v", err)
+	}
+	if !bytes.Equal(stored, shown) {
+		t.Fatal("blob store returned different bytes from those shown")
+	}
+	if ok, err := s.bucket.Exists(ctx, "rendered/"+h+".render"); err != nil || !ok {
+		t.Fatalf("render not at rendered/%s.render (exists=%v, err=%v)", h, ok, err)
+	}
+}

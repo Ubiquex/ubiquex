@@ -13,15 +13,34 @@ deterministically, for a human deciding whether to accept it. Golden file
 at `core/testdata/render/proposal.golden`; regenerate with
 `UBX_UPDATE_GOLDEN=1` and bump `RendererVersion` in the same change.
 Recorded in `docs/schema.md`'s "Amendment: a renderer for a pending
-proposal". Next, in order: UBI-294 (`Acceptance.RenderedHash`, a
-`loopback` method, stored renders), then UBI-298 (`ubx verify` re-checks a
-`loopback` acceptance).
+proposal".
+
+**2026-11-15: `rendered_hash` and loopback acceptance (UBI-294).**
+`Acceptance.RenderedHash` (plain SHA-256 of the shown bytes) and `Method
+"loopback"`, whose approver is always `loopback:presence`; `local` is
+unchanged. `LedgerStore` gains `ReadRendered`/`WriteRenderedIfAbsent`
+(git: `ledger/rendered/`, blob: `rendered/`, create-only).
+`Ledger.StageRender` stores the render, then returns the stored bytes for
+display. `AcceptFromLoopback` refuses unless those bytes are stored,
+verify, and are a render of the proposal being accepted. Recorded in
+`docs/schema.md`'s "Amendment: rendered_hash and loopback acceptance".
+`ubiquex-internals` page edits are on that repo's own PR; its
+`sync-state.json` stamp waits for this to merge. Nothing calls
+`AcceptFromLoopback` yet: the loopback page is UBI-295.
+
+**2026-11-15: `ubx verify` re-checks a loopback acceptance (UBI-298).**
+`core.VerifyLoopbackAcceptance` reads the stored render, checks its hash,
+re-renders, and compares. Six distinct outcomes, named in `--json` as
+`outcome`. A missing render fails rather than passing; a render from a
+different `RendererVersion` is inconclusive. `local` and `pr_merge`
+checks are unchanged. User docs: `ubx-docs-users`
+`cli-reference/verify.mdx`, on its own PR.
 
 **Flagged, not fixed: this file was last rewritten 2026-09-13.** 68 PRs
 merged between then and #219, and the rest of this file was not re-walked
 on 2026-11-15. Treat everything below as possibly stale until a session
-rewrites it under rule 3. That rewrite is deliberately not part of the
-UBI-296, UBI-294 and UBI-298 PRs.
+rewrites it under rule 3. That rewrite is UBI-299, deliberately not
+part of the UBI-296, UBI-294 and UBI-298 PRs.
 
 **ubx v0.6.0 is released (2026-09-13).** Two things that were quietly
 untrue are now true: a blueprint's content hash reaches the ledger on

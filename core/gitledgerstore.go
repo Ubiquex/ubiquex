@@ -23,6 +23,7 @@ import (
 //	<dir>/
 //	  ledger/proposals/<id>.prop.json
 //	  ledger/applies/<id>.attempt-<n>.apply.json
+//	  ledger/rendered/<rendered-hash>.render   (UBI-294)
 //	  .ubx/ledger.lock   (head pointer)
 //	  .ubx/lock          (concurrency lock)
 //	  .ubx/salt          (redaction salt)
@@ -35,6 +36,10 @@ func newGitLedgerStore(dir string) *gitLedgerStore { return &gitLedgerStore{dir:
 func (g *gitLedgerStore) proposalsDir() string { return filepath.Join(g.dir, "ledger", "proposals") }
 func (g *gitLedgerStore) proposalPath(id string) string {
 	return filepath.Join(g.proposalsDir(), id+".prop.json")
+}
+func (g *gitLedgerStore) renderedDir() string { return filepath.Join(g.dir, "ledger", "rendered") }
+func (g *gitLedgerStore) renderedPath(hash string) string {
+	return filepath.Join(g.renderedDir(), hash+".render")
 }
 func (g *gitLedgerStore) headPath() string     { return filepath.Join(g.dir, ".ubx", "ledger.lock") }
 func (g *gitLedgerStore) lockFilePath() string { return filepath.Join(g.dir, ".ubx", "lock") }
@@ -70,6 +75,52 @@ func (g *gitLedgerStore) WriteProposalIfAbsent(ctx context.Context, id string, d
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func (g *gitLedgerStore) ReadRendered(ctx context.Context, hash string) ([]byte, error) {
+	b, err := os.ReadFile(g.renderedPath(hash))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrStoreObjectNotFound
+	}
+	return b, err
+}
+
+// WriteRenderedIfAbsent writes to a temp file, fsyncs, then hard-links it
+// into place. The link fails if the target exists, which makes the write
+// create-only without a racy stat-then-write, and a crash mid-write never
+// leaves a partial render under the real name: a truncated object there
+// would fail its own hash check on every later read, permanently.
+func (g *gitLedgerStore) WriteRenderedIfAbsent(ctx context.Context, hash string, data []byte) error {
+	if err := os.MkdirAll(g.renderedDir(), 0o755); err != nil {
+		return fmt.Errorf("write rendered: %w", err)
+	}
+	tmp, err := os.CreateTemp(g.renderedDir(), ".render-*.tmp")
+	if err != nil {
+		return fmt.Errorf("write rendered: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write rendered: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write rendered: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write rendered: %w", err)
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return fmt.Errorf("write rendered: %w", err)
+	}
+	if err := os.Link(tmpName, g.renderedPath(hash)); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return ErrStoreObjectExists
+		}
+		return fmt.Errorf("write rendered: %w", err)
+	}
+	return nil
 }
 
 func (g *gitLedgerStore) Head(ctx context.Context) (string, error) {
