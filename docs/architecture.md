@@ -2543,6 +2543,38 @@ already-packaged blueprint) and `blueprint.Validate` independently, and
 reports whichever succeeded -- read-only, the scratch directory is
 always removed after.
 
+### Served stacks, and the three read tools an agent needs to plan (UBI-295)
+
+The nine tools above take a `ledger_dir` per call, so a caller can point
+them anywhere on the machine. The agent-facing tools UBI-295 adds take a
+different line: they see only the stacks `ubx mcp` was started to serve,
+named with `--serve <stack-root>` (repeatable). Each root must be a ubx
+root whose `.ubx/config` sets `stack`, and an agent addresses a served stack
+by that name and never by path. A name that was not served is refused
+with the names that were. Widening that set later is painless; narrowing
+it would break whatever had come to depend on it, which is why it starts
+narrow. The older tools are unchanged.
+
+Three read tools, because a change cannot be written without them:
+
+- `stacks`: each served stack's name, root, ledger head, and every live
+  resource address. Without it an agent can only create; a modify or
+  destroy has to name an address that exists.
+- `state`: one served stack's resources, in `ubx_status`'s own format-1
+  shape (`statusJSON`, embedded unchanged), plus, for one `address`, that
+  resource's folded state (`Ledger.FoldState`), which is what a modify is
+  written against. Ledger only; it never contacts a provider.
+- `schema`: the resource and data source types each declared provider
+  offers, or for one type its attributes (required, optional, computed,
+  sensitive) and nested blocks, from the provider's own schema. Without it
+  an agent learns the provider one rejected plan at a time. Schemas are
+  fetched once per server process and kept.
+
+Provider loading for these tools goes through `loadStackSchemas`
+(`cli/resolve.go`), which `loadResolveProviders` now wraps for the CLI: the
+same provider tables, the same single-provider fallback, with no cobra
+command needed, since an MCP call has no flags to consult.
+
 ## HCL wrapper for calling blueprints (UBI-226)
 
 `.ubx.hcl`: a thin, closed HCL grammar for composing blueprint calls in
