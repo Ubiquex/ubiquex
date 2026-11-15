@@ -44,6 +44,17 @@ and `schema` (provider types and attributes) read them.
 `loadStackSchemas` is the cobra-free provider loader both they and
 `loadResolveProviders` use.
 
+**2026-11-15: `plan`, `apply`, and the loopback approval page (UBI-295,
+part 2).** No tool approves. `plan` files a pending proposal and returns
+an approval URL; `apply` refuses until the ledger accepts that hash, then
+ships through `newShipPool`, which it shares with `ubx ship`. Package
+`approval`: the `Channel` interface, and `Loopback`, served on a loopback
+IP (`--approval-listen`), which stages the render on view and accepts via
+`core.AcceptFromLoopback`. Found by approving in a real browser: under
+`Referrer-Policy: no-referrer` the page's own POST carries `Origin: null`
+and was refused. The policy is now `same-origin`, pinned by a test. Not
+done: the recorded demo.
+
 **Flagged, not fixed: this file was last rewritten 2026-09-13.** 68 PRs
 merged between then and #219, and the rest of this file was not re-walked
 on 2026-11-15. Treat everything below as possibly stale until a session

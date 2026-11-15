@@ -262,32 +262,19 @@ consistency shows its own work instead of sitting silent.`,
 			// at once -- see docs/resolver.md's own staged
 			// --source/--provider-version retirement plan for what happens
 			// when a table AND the singular flags are both given.
-			var pool executor.ApplierPool
 			if hasProviderTable(cfg) {
 				warnIfLegacyProviderFlagsGiven(cmd, cfg)
-				pp, err := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
-				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
-				}
-				defer pp.Close()
-				pool = pp
 			} else {
 				applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
 				if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
 				}
-				path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
-				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
-				}
-				client, err := provider.Launch(ctx, path)
-				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
-				}
-				defer client.Close()
-				applier := newApplier(client.Provider, salt, source)
-				pool = executor.SingleApplierPool(applier, json.RawMessage(providerConfig))
 			}
+			pool, closePool, err := newShipPool(ctx, cfg, salt, providerPath, source, providerVersion, providerConfig)
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("ship: %w", err)}
+			}
+			defer closePool()
 
 			// UBI-61's own "progress narration" scope: live per-resource
 			// transition/reconcile-attempt lines as executor.Ship's own
@@ -349,6 +336,35 @@ consistency shows its own work instead of sitting silent.`,
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
 
 	return cmd
+}
+
+// newShipPool builds the provider pool executor.Ship applies through,
+// once a caller has settled its provider selection: a stack with a real
+// provider table in .ubx/config gets a genuine multi-entry pool
+// (cli/providerpool.go) that lazily launches whichever providers a
+// proposal's nodes need; a single-provider stack gets the one provider
+// providerPath or source/providerVersion names, launched up front and
+// wrapped in SingleApplierPool. Shared by `ubx ship` and the MCP apply
+// tool, so the two cannot come to apply differently. The returned close
+// releases whatever was launched.
+func newShipPool(ctx context.Context, cfg *Config, salt []byte, providerPath, source, providerVersion, providerConfig string) (executor.ApplierPool, func(), error) {
+	if hasProviderTable(cfg) {
+		pp, err := newProviderPool(salt, cfg.ThirdpartyProviders, cfg.Providers, cfg.ProviderConfigs)
+		if err != nil {
+			return nil, nil, err
+		}
+		return pp, func() { pp.Close() }, nil
+	}
+	path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := provider.Launch(ctx, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	applier := newApplier(client.Provider, salt, source)
+	return executor.SingleApplierPool(applier, json.RawMessage(providerConfig)), func() { client.Close() }, nil
 }
 
 // resolveAndValidatePlan is acceptPlanInline's own pre-UBI-62 body, minus

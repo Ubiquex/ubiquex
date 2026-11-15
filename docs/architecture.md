@@ -2386,7 +2386,8 @@ a non-cobra caller at all; nothing about its behavior changed.
 `ubx accept`, `ubx propose`'s ship path, `ubx writeback`, `ubx
 revert-plan`'s `--tf-dir` application, and `ubx scan --surface-as` (which
 opens a real GitHub issue/PR) are deliberately **not** exposed as MCP
-tools — not because they couldn't be wired up mechanically, but because
+tools (UBI-295 adds `apply`, which ships only what a human already
+accepted; nothing approves) — not because they couldn't be wired up mechanically, but because
 this trust chain's entire thesis is that accepting a proposal is a
 recorded human (or PR-merge-derived) decision, never something an
 assistant does on a human's behalf mid-conversation. This is stated
@@ -2574,6 +2575,59 @@ Provider loading for these tools goes through `loadStackSchemas`
 (`cli/resolve.go`), which `loadResolveProviders` now wraps for the CLI: the
 same provider tables, the same single-provider fallback, with no cobra
 command needed, since an MCP call has no flags to consult.
+
+### plan, apply, and approval that no tool can give (UBI-295)
+
+Two tools change a served stack. `plan` takes an `ubx:intent/v1` document,
+resolves it through the same `resolver.Resolve` every other entry point
+uses, writes it to the stack's own `.ubx/plans/<hash>.json` exactly as
+`ubx plan` does, and returns the proposal hash, the render
+(`core.RenderProposal`), and an approval URL. `apply` takes a proposal hash
+and ships it through `executor.Ship`, sharing `newShipPool` with `ubx ship`
+so the two cannot apply differently. It refuses until the ledger holds an
+acceptance for that exact hash, and that refusal is written for the agent
+to relay to a human: what nobody has done yet, where to do it, and that
+the agent cannot do it.
+
+There is no approve tool, and that absence is the gate. Nothing in the
+tool list creates an acceptance, so there is no permission to
+misconfigure and no token for an agent to hold. Approval goes through an
+`approval.Channel` (package `approval`), which hands the agent a `Handle`
+carrying a URL and no credential. Its one implementation, `Loopback`, is a
+page `ubx mcp` serves on a loopback IP (`--approval-listen`, default
+`127.0.0.1:0`), started only when at least one stack is served:
+
+- **Opening the page stages the render.** `Ledger.StageRender` renders the
+  pending proposal, stores the bytes, and reads them back, and the page
+  shows what was read back. What the human sees is by construction what
+  the ledger keeps.
+- **Before anything is shown,** the plan file is checked the way `ubx ship`
+  checks one before its signing moment: it belongs to the stack, it hashes
+  to its file name, its pins are fresh, and its delta forms a dependency
+  graph.
+- **Approving posts the rendered hash.** `core.AcceptFromLoopback` refuses
+  unless those bytes are stored and the proposal re-renders to exactly
+  them. It writes method `loopback`, approver `loopback:presence`, and
+  `rendered_hash`, then removes the plan file. A destroy needs a ticked
+  confirmation, the page's counterpart of `--confirm-destroys`. A plan the
+  ledger moved past is refused, and the agent is told to plan again.
+- **Defences.** The POST must carry an `Origin` naming this server, a
+  same-origin `Sec-Fetch-Site` when the browser sends one, and an HMAC
+  token under a per-process key that only the page carries. The `Host`
+  must name the listener (DNS rebinding). The page cannot be framed
+  (clickjacking). Its referrer policy is `same-origin`, not `no-referrer`:
+  under `no-referrer` browsers send `Origin: null` on the page's own POST,
+  and every real approval was refused. That was found by approving in a
+  real browser; tests that set `Origin` by hand could not see it.
+- **What it does not stop.** An agent with a shell on the same machine can
+  fetch the page and post the form like a browser. The product claim is
+  scoped to match: a change made through ubx carries a record of who
+  approved it and what they saw. Whether an agent can reach around ubx is
+  a question about what else it was given, and the same agent with cloud
+  credentials could skip ubx entirely.
+
+`ubx verify` re-checks the resulting acceptance from the ledger alone: it
+reads the stored render, checks its hash, and re-renders.
 
 ## HCL wrapper for calling blueprints (UBI-226)
 

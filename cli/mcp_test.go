@@ -42,7 +42,7 @@ func connectMCPTestClient(t *testing.T) *mcp.ClientSession {
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 
-	server := newMCPServer(nil)
+	server := newMCPServer(nil, nil)
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
 	if err != nil {
 		t.Fatalf("server.Connect: %v", err)
@@ -127,7 +127,7 @@ func TestMCP_ListTools(t *testing.T) {
 		"ubx_why": true, "ubx_status": true, "ubx_scan": true, "ubx_history": true,
 		"draft_ubxfile": true, "validate_ubxfile": true, "build_blueprint": true,
 		"list_blueprints": true, "describe_blueprint": true,
-		"stacks": true, "state": true, "schema": true,
+		"stacks": true, "state": true, "schema": true, "plan": true, "apply": true,
 	}
 	if len(res.Tools) != len(want) {
 		t.Fatalf("got %d tools, want %d", len(res.Tools), len(want))
