@@ -739,6 +739,8 @@ ask it "who changed widget1 and when".
 
 ### 9.4 The HCL wrapper
 
+> **Removed (UBI-301, 2026-11-15):** `.ubx.hcl` is gone. Skip this section; it no longer runs.
+
 `.ubx.hcl` is parsed, never evaluated: a deterministic wrapper for
 calling blueprints, not a fourth authoring medium, and it cannot hold a
 hand-written resource. Build a blueprint first (9.2), then:

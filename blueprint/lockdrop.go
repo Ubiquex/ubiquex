@@ -20,7 +20,7 @@ import (
 // bites produced this and nothing else:
 //
 //	dropped rev-bp2 from blueprints.lock: stack "rev2" no longer declares it
-//	Plan  rev2 · from stack.ubx.hcl
+//	Plan  rev2 · from stack.ts
 //	delta: +0 ~0 -0
 //
 // A line saying a declaration went, followed by a line saying there are

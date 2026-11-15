@@ -18,7 +18,7 @@ import (
 // <hash>" line PR mode's acceptance derivation depends on (docs/schema.md's
 // pr_merge acceptance amendment) — issue mode passes an empty hash, since
 // an issue is never merged/accepted, so there's nothing to derive from it.
-func buildReceipt(p *core.Proposal, trailerHash, diffPreview string) string {
+func buildReceipt(p *core.Proposal, trailerHash string) string {
 	var b strings.Builder
 	if trailerHash != "" {
 		fmt.Fprintf(&b, "ubx-proposal: %s\n\n", trailerHash)
@@ -35,12 +35,6 @@ func buildReceipt(p *core.Proposal, trailerHash, diffPreview string) string {
 			b.WriteString(receiptIntentSourceLine(s))
 		}
 		b.WriteString("\n")
-	}
-
-	if diffPreview != "" {
-		b.WriteString("### .tf write-back preview\n\n```diff\n")
-		b.WriteString(diffPreview)
-		b.WriteString("\n```\n\n")
 	}
 
 	b.WriteString("<details><summary>Full proposal</summary>\n\n```json\n")

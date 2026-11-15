@@ -115,7 +115,6 @@ func TestInit_WritesRealValues_ForGivenFlags(t *testing.T) {
 		"--provider-config", `{"timeout":"30s"}`,
 		"--region", "us-east-1",
 		"--github-repo", "acme/infra",
-		"--tf-dir", "./terraform",
 	)
 	if err != nil {
 		t.Fatalf("ubx init: %v\noutput: %s", err, out)
@@ -144,9 +143,6 @@ func TestInit_WritesRealValues_ForGivenFlags(t *testing.T) {
 	}
 	if cfg.GithubRepo != "acme/infra" {
 		t.Errorf("GithubRepo = %q, want acme/infra", cfg.GithubRepo)
-	}
-	if cfg.TFDir != "./terraform" {
-		t.Errorf("TFDir = %q, want ./terraform", cfg.TFDir)
 	}
 
 	if !strings.Contains(out, "write stack.ts") || strings.Contains(out, "add a provider above") {

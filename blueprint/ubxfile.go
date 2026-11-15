@@ -2,8 +2,7 @@
 // compiling its resolved intent draft into real Go SDK source
 // (docs/blueprint.md has the full design). Named after the CLI verb it
 // implements one-to-one (`ubx blueprint build`), matching this project's
-// own package-naming convention (CLAUDE.md) -- writeback/ implements
-// `ubx writeback` the same way.
+// own package-naming convention (CLAUDE.md).
 package blueprint
 
 import (

@@ -535,6 +535,8 @@ prove the loop end-to-end on one repo, not a general-purpose App yet.
 
 ## Revert path (UBI-16)
 
+> **Removed (UBI-301, 2026-11-15):** writeback, and the `--tf-dir` corrective `.tf` diff described here, are gone. There are no source files to correct. `revert-plan` still emits the plan; it no longer emits a `.tf` diff or exits 1 for manual `.tf` steps. The text below is the historical design record.
+
 M3-4's other resolution to a detected drift (§Core concepts — Drift: "two
 resolutions: adopt ... or revert (signed restore)"). Where `drift_adopt`
 records that reality's new state (Y) is now the ledger's truth, `drift_revert`
@@ -999,6 +1001,8 @@ proposal files that accept cleanly, one after another, in the order
 patch by hand first.
 
 ## Config defaults (UBI-19)
+
+> **Amended (UBI-301, 2026-11-15):** `tf_dir` and `--tf-dir` are gone with writeback, from `.ubx/config`, `ubx init` and every command. A config that still sets `tf_dir` gets the ordinary unknown-key warning. The rest of this section stands.
 
 Production ladder step 4: daily commands were carrying five flags
 (`--stack`, `--source`/`--provider-version` or `--provider`,
@@ -2631,6 +2635,8 @@ reads the stored render, checks its hash, and re-renders.
 
 ## HCL wrapper for calling blueprints (UBI-226)
 
+> **Removed (UBI-301, 2026-11-15):** `.ubx.hcl` and the `hclstack` package are gone. A stack can no longer be authored this way. Ledgers holding what a `.ubx.hcl` call produced still read: the call expanded into ordinary creates whose `sources` carry `kind: "blueprint"`, which nothing here removes (`cli/ledger_hcl_history_test.go` pins that against a hand-written entry). The text below is the historical design record.
+
 `.ubx.hcl`: a thin, closed HCL grammar for composing blueprint calls in
 a stack -- not a fourth authoring medium (the SDK stays the only one,
 this document's own Thesis and UBI-224's own reasoning both still
@@ -3673,6 +3679,8 @@ own design center rather than an oversight.
 
 ## Diagram medium (built, UBI-47 — docs/diagram-medium.md; closed)
 
+> **Removed (UBI-301, 2026-11-15):** the render half is gone too. `diagram`, `mdrender`, and `ubx render`'s D2 and `--md` output (with `--check`/`--out`) were removed. `ubx render` keeps only override generation (`--from-drift`, `--sync-overrides`), which no longer needs `--md`.
+
 > **Authoring half removed (UBI-224, 2026-09-01).** The section below
 > describes the PARSE direction (`ubx propose --from-diagram`) as closed
 > history; it is gone. The RENDER direction (`FoldState` → canonical D2,
@@ -4329,3 +4337,33 @@ Any failure to list releases (offline, rate-limited, a GitHub outage,
 an unparseable response) silently returns the stamped version. Acquiring
 that is exactly what happened before this existed and is known to work, so
 a failure to find something better must never become a failure to run.
+
+## Amendment (2026-11-15, UBI-301): writeback, `.ubx.hcl` and the state projections removed
+
+Four packages whose premise was a world of source files and human-readable
+projections: `writeback` (edit attributes back into `.tf`), `hclstack`
+(`.ubx.hcl`, composition for blueprint calls), `diagram` (D2 render of current
+state) and `mdrender` (markdown render of current state). With the agent
+authoring and the ledger recording, none had a reader. No users and nothing in
+production, so this is deletion, not deprecation.
+
+What went with them:
+- `ubx writeback`;
+- `revert-plan --tf-dir`;
+- `scan --surface-as`'s `.tf` preview in the receipt;
+- `tf_dir` everywhere it was read or written;
+- `ubx plan`/`ubx resolve` reading `.ubx.hcl`, including bare-plan autodetect;
+- `ubx render`'s D2 and `--md` output with `--check`/`--out`.
+
+What stayed: `ubx render --from-drift`/`--sync-overrides`, blueprint override
+generation, which never depended on either projection. It sat behind `--md`
+only because it grew out of the markdown medium, and it now takes its own
+flags. Whether it belongs in `render`, or anywhere, is part of the open
+blueprint question.
+
+The read side is unchanged. No ledger type or field changed. A `.ubx.hcl`
+call's records are ordinary creates with `kind: "blueprint"` sources, and they
+read, verify, render, and explain themselves through `ubx why` and
+`ubx history` (`cli/ledger_hcl_history_test.go`, against a hand-written
+entry).
+

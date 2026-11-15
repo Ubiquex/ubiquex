@@ -86,7 +86,7 @@ func TestCascadeAdversarial_Row3_CrossFormatCascadeChain(t *testing.T) {
 	root := t.TempDir()
 	rootFile := writeCascadeFile(t, root, "config.toml", `github_repo = "acme/infra"`)
 	mid := filepath.Join(root, "mid")
-	midFile := writeCascadeFile(t, mid, "config.hcl", `tf_dir = "./terraform"`)
+	midFile := writeCascadeFile(t, mid, "config.hcl", `gitlab_project = "./terraform"`)
 	leaf := filepath.Join(mid, "leaf")
 	leafFile := writeCascadeFile(t, leaf, "config.yaml", `stack: "payments"`)
 
@@ -95,14 +95,14 @@ func TestCascadeAdversarial_Row3_CrossFormatCascadeChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigResolved: %v", err)
 	}
-	if rc.Config.GithubRepo != "acme/infra" || rc.Config.TFDir != "./terraform" || rc.Config.Stack != "payments" {
+	if rc.Config.GithubRepo != "acme/infra" || rc.Config.GitlabProject != "./terraform" || rc.Config.Stack != "payments" {
 		t.Fatalf("got %+v, want all three keys present from their own format", rc.Config)
 	}
 	if rc.Provenance["github_repo"] != rootFile {
 		t.Errorf("provenance[github_repo] = %q, want %q", rc.Provenance["github_repo"], rootFile)
 	}
-	if rc.Provenance["tf_dir"] != midFile {
-		t.Errorf("provenance[tf_dir] = %q, want %q", rc.Provenance["tf_dir"], midFile)
+	if rc.Provenance["gitlab_project"] != midFile {
+		t.Errorf("provenance[gitlab_project] = %q, want %q", rc.Provenance["gitlab_project"], midFile)
 	}
 	if rc.Provenance["stack"] != leafFile {
 		t.Errorf("provenance[stack] = %q, want %q", rc.Provenance["stack"], leafFile)
@@ -193,7 +193,7 @@ func TestCascadeAdversarial_Row7_HCLInterpolationRejected_WholeFileFails(t *test
 
 func TestCascadeAdversarial_Row7_HCLFunctionCallRejected(t *testing.T) {
 	dir := t.TempDir()
-	writeCascadeFile(t, dir, "config.hcl", `tf_dir = upper("./terraform")`)
+	writeCascadeFile(t, dir, "config.hcl", `gitlab_project = upper("./terraform")`)
 	withConfigSearchDir(t, dir)
 
 	_, err := LoadConfigResolved(&bytes.Buffer{})
@@ -210,12 +210,12 @@ func TestCascadeAdversarial_Row7_ViolationNeverPartiallyMerges(t *testing.T) {
 	root := t.TempDir()
 	writeCascadeFile(t, root, "config", `github_repo = "acme/infra"`)
 	child := filepath.Join(root, "child")
-	writeCascadeFile(t, child, "config.hcl", "stack = \"${path.module}\"\ntf_dir = \"./terraform\"\n")
+	writeCascadeFile(t, child, "config.hcl", "stack = \"${path.module}\"\ngitlab_project = \"./terraform\"\n")
 
 	withConfigSearchDir(t, child)
 	_, err := LoadConfigResolved(&bytes.Buffer{})
 	if err == nil {
-		t.Fatal("expected the whole cascade load to fail -- a partial salvage of tf_dir would be silently wrong")
+		t.Fatal("expected the whole cascade load to fail -- a partial salvage of gitlab_project would be silently wrong")
 	}
 }
 
@@ -224,7 +224,7 @@ func TestCascadeAdversarial_Row7_ViolationNeverPartiallyMerges(t *testing.T) {
 func TestCascadeAdversarial_Row8_PerDirectoryStackDefault_RestInherited(t *testing.T) {
 	root := t.TempDir()
 	writeCascadeFile(t, root, "config", `
-tf_dir = "./terraform"
+gitlab_project = "./terraform"
 
 [provider]
 source = "hashicorp/aws"
@@ -241,8 +241,8 @@ version = "6.60.0"
 	if rc.Config.Stack != "payments" {
 		t.Errorf("Stack = %q, want payments", rc.Config.Stack)
 	}
-	if rc.Config.TFDir != "./terraform" {
-		t.Errorf("TFDir = %q, want ./terraform (inherited from root)", rc.Config.TFDir)
+	if rc.Config.GitlabProject != "./terraform" {
+		t.Errorf("GitlabProject = %q, want ./terraform (inherited from root)", rc.Config.GitlabProject)
 	}
 	if rc.Config.Provider.Source != "hashicorp/aws" || rc.Config.Provider.Version != "6.60.0" {
 		t.Errorf("Provider = %+v, want the root's own source/version", rc.Config.Provider)
@@ -255,7 +255,7 @@ func TestCascadeAdversarial_Row9_ProvenanceIsFormatBlind(t *testing.T) {
 	root := t.TempDir()
 	rootFile := writeCascadeFile(t, root, "config.toml", `github_repo = "acme/infra"`)
 	mid := filepath.Join(root, "mid")
-	midFile := writeCascadeFile(t, mid, "config.hcl", `tf_dir = "./terraform"`)
+	midFile := writeCascadeFile(t, mid, "config.hcl", `gitlab_project = "./terraform"`)
 	leaf := filepath.Join(mid, "leaf")
 	leafFile := writeCascadeFile(t, leaf, "config.yaml", `stack: "payments"`)
 

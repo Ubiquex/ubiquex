@@ -66,7 +66,6 @@ type Config struct {
 	AzureDevOpsProject     string                    `toml:"azure_devops_project" json:"azure_devops_project"`
 	BitbucketServerURL     string                    `toml:"bitbucket_server_url" json:"bitbucket_server_url"`
 	BitbucketServerProject string                    `toml:"bitbucket_server_project" json:"bitbucket_server_project"`
-	TFDir                  string                    `toml:"tf_dir" json:"tf_dir"`
 	KnownDependents        []string                  `toml:"known_dependents" json:"known_dependents"`
 	K8sAudit               K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
 	Ledger                 LedgerConfig              `toml:"ledger" json:"ledger"`
@@ -453,14 +452,6 @@ func applyBitbucketServerDefaults(cmd *cobra.Command, bitbucketServerURL, bitbuc
 	}
 	if !cmd.Flags().Changed("bitbucket-server-project") && cfg.BitbucketServerProject != "" {
 		*bitbucketServerProject = cfg.BitbucketServerProject
-	}
-}
-
-// applyTFDirDefault fills tfDir from cfg if --tf-dir wasn't explicitly
-// given.
-func applyTFDirDefault(cmd *cobra.Command, tfDir *string, cfg *Config) {
-	if !cmd.Flags().Changed("tf-dir") && cfg.TFDir != "" {
-		*tfDir = cfg.TFDir
 	}
 }
 

@@ -464,8 +464,9 @@ all and so cannot follow the error's own advice to change it.
 
 The check above exists to catch an AUTHORING MISTAKE. A generated
 document has no author of that field, so `resolver.WithInferredOp()`
-derives the op from ledger presence for the two authoring paths that
-generate one, an SDK program and a `.ubx.hcl` file. A hand-written
+derives the op from ledger presence for the authoring path that
+generates one, an SDK program (a `.ubx.hcl` file was the other, until
+UBI-301 removed it). A hand-written
 intent file keeps exactly this section's strictness, both
 `ErrCreateTargetExists` and `ErrModifyTargetMissing` included, because
 there a human really did state an op and really can be wrong about it.

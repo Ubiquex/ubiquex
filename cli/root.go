@@ -31,7 +31,6 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newPlanCmd())
 	root.AddCommand(newWhyCmd())
 	root.AddCommand(newScanCmd())
-	root.AddCommand(newWritebackCmd())
 	root.AddCommand(newRevertPlanCmd())
 	root.AddCommand(newShipCmd())
 	root.AddCommand(newStatusCmd())

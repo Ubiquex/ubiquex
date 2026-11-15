@@ -59,12 +59,12 @@ func writeBlueprintBindingBypassStack(t *testing.T, dir, pkgDir string) string {
 // calling sdk.Resource() by hand -- never through the blueprint's own
 // wrapper function -- shipped with "sources": null, completely
 // indistinguishable from an ordinary hand-written resource in the
-// resolved proposal, `ubx why`, and `ubx render` alike, even though the
+// resolved proposal and `ubx why` alike, even though the
 // binding itself came from a blueprint. ResourceBinding now carries
 // BlueprintName (stamped by blueprint/gogen.go's own renderGoBindings),
 // and sdk.Resource checks it as a fallback exactly when no
 // PushBlueprintSource scope is open -- this test proves the fix reaches
-// all the way through resolve, ubx why, and ubx render, the same three
+// all the way through resolve and ubx why, the same
 // real surfaces UBI-225's own report checked by hand.
 func TestBlueprintBinding_DirectImportBypass_NowHasProvenance(t *testing.T) {
 	requireHermeticSandbox(t)
@@ -138,14 +138,4 @@ func TestBlueprintBinding_DirectImportBypass_NowHasProvenance(t *testing.T) {
 		t.Fatalf("ubx why on a bypass-constructed blueprint resource is missing provenance -- the UBI-225 gap, unfixed:\n%s", whyOut)
 	}
 
-	renderOut, err := runUbx(t, nil, "render", "--stack", "platform", "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx render: %v\noutput: %s", err, renderOut)
-	}
-	if !strings.Contains(renderOut, "style.stroke-dash: 3") {
-		t.Fatalf("ubx render on a bypass-constructed blueprint resource is missing the dashed-border grouping -- the UBI-225 gap, unfixed:\n%s", renderOut)
-	}
-	if !strings.Contains(renderOut, `"bypass"`) {
-		t.Fatalf("ubx render missing the bypass resource:\n%s", renderOut)
-	}
 }

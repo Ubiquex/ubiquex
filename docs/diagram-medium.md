@@ -1,5 +1,7 @@
 # Diagram medium — D2 only (UBI-47)
 
+> **Fully superseded (UBI-301, 2026-11-15).** The render half this note above called current is removed too: the `diagram` package and `ubx render`'s D2 output are gone. The whole document is now the historical design record.
+
 > **Partly superseded (UBI-224, 2026-09-01): the diagram AUTHORING half
 > this document specifies (parse, `ubx propose --from-diagram`, `diagram/
 > parse.go`/`crossref.go`/`topology.go`) is removed.** The SDK is now the

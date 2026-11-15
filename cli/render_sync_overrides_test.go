@@ -72,10 +72,10 @@ func TestRenderSyncOverrides_GoSyntax_CorrectStatement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runUbx(t, driftEnvForName("v2"), "render", "--md", "--sync-overrides",
+	out, err := runUbx(t, driftEnvForName("v2"), "render", "--sync-overrides",
 		"--stack", "payments", "--ledger-dir", ledgerDir, "--provider", fakeProviderBinary)
 	if err != nil {
-		t.Fatalf("ubx render --md --sync-overrides: %v\noutput: %s", err, out)
+		t.Fatalf("ubx render --sync-overrides: %v\noutput: %s", err, out)
 	}
 	want := "sdk.Override(\"payments.fake_widget.primary\", map[string]any{\n\t\"name\": \"v2\",\n})\n"
 	if out != want+"\n" {
@@ -90,10 +90,10 @@ func TestRenderFromDrift_SingleAddress_GeneratesOneStatement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runUbx(t, driftEnvForName("v2"), "render", "--md", "--from-drift", "payments.fake_widget.primary",
+	out, err := runUbx(t, driftEnvForName("v2"), "render", "--from-drift", "payments.fake_widget.primary",
 		"--stack", "payments", "--ledger-dir", ledgerDir, "--provider", fakeProviderBinary)
 	if err != nil {
-		t.Fatalf("ubx render --md --from-drift: %v\noutput: %s", err, out)
+		t.Fatalf("ubx render --from-drift: %v\noutput: %s", err, out)
 	}
 	if !strings.Contains(out, `sdk.Override("payments.fake_widget.primary"`) {
 		t.Fatalf("expected the single override statement, got:\n%s", out)
@@ -111,20 +111,11 @@ func TestRenderFromDrift_NotDrifted_ExitOne(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runUbx(t, conformanceWidgetEnv, "render", "--md", "--from-drift", "payments.fake_widget.primary",
+	out, err := runUbx(t, conformanceWidgetEnv, "render", "--from-drift", "payments.fake_widget.primary",
 		"--stack", "payments", "--ledger-dir", ledgerDir, "--provider", fakeProviderBinary)
 	requireExitCode(t, err, 1, out)
 	if !strings.Contains(err.Error(), "is not currently drifted") {
 		t.Fatalf("expected a not-currently-drifted refusal, got: %v", err)
-	}
-}
-
-func TestRenderSyncOverrides_RequiresMd(t *testing.T) {
-	ledgerDir := t.TempDir()
-	out, err := runUbx(t, nil, "render", "--sync-overrides", "--stack", "payments", "--ledger-dir", ledgerDir)
-	requireExitCode(t, err, 2, out)
-	if !strings.Contains(err.Error(), "require --md") {
-		t.Fatalf("expected a --md-required refusal, got: %v", err)
 	}
 }
 
@@ -134,7 +125,7 @@ func TestRenderSyncOverrides_RequiresMd(t *testing.T) {
 // one -- every OTHER provider-launching command (ubx status --drift, ubx
 // resolve) applies that config-file default automatically
 // (applyProviderDefaults). Caught during this ticket's own required live
-// verification (a real `ubx render --md --sync-overrides` run against a
+// verification (a real `ubx render --sync-overrides` run against a
 // real playground config failed with "either --provider or --source... is
 // required" despite .ubx/config already naming one), fixed at the actual
 // cause rather than worked around by always passing --provider in tests.
@@ -147,10 +138,10 @@ func TestRenderFromDrift_UsesConfigFileProviderDefault(t *testing.T) {
 	writeConfig(t, ledgerDir, "stack = \"payments\"\n\nprovider = {\n  path = "+quoteHCL(fakeProviderBinary)+"\n}\n")
 	withConfigSearchDir(t, ledgerDir)
 
-	out, err := runUbx(t, driftEnvForName("v2"), "render", "--md", "--from-drift", "payments.fake_widget.primary",
+	out, err := runUbx(t, driftEnvForName("v2"), "render", "--from-drift", "payments.fake_widget.primary",
 		"--ledger-dir", ledgerDir)
 	if err != nil {
-		t.Fatalf("ubx render --md --from-drift (no --provider flag, config default only): %v\noutput: %s", err, out)
+		t.Fatalf("ubx render --from-drift (no --provider flag, config default only): %v\noutput: %s", err, out)
 	}
 	if !strings.Contains(out, `sdk.Override("payments.fake_widget.primary"`) {
 		t.Fatalf("expected the override statement, got:\n%s", out)
@@ -173,7 +164,7 @@ func TestRenderSyncOverrides_AmbiguousMedium_Refused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runUbx(t, driftEnvForName("v2"), "render", "--md", "--sync-overrides",
+	out, err := runUbx(t, driftEnvForName("v2"), "render", "--sync-overrides",
 		"--stack", "payments", "--ledger-dir", ledgerDir, "--provider", fakeProviderBinary)
 	requireExitCode(t, err, 2, out)
 	if !strings.Contains(err.Error(), "found 2") {

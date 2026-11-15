@@ -33,8 +33,7 @@ var errShipDeclined = errors.New("ship: declined")
 
 // newShipCmd is UBI-26's executor CLI surface: takes an already-accepted
 // drift_revert proposal and actually executes it against live cloud --
-// the one command in this codebase, alongside a future writeback --write,
-// that changes real infrastructure rather than only ever reading or
+// the one command in this codebase that changes real infrastructure rather than only ever reading or
 // recording. Every mechanism it drives (the failure-state machine,
 // idempotent re-run, freshness re-verification, redaction) is built and
 // tested in core/executor; this command is a thin CLI wrapper over
@@ -670,8 +669,8 @@ func resolveBareShipTarget(cmd *cobra.Command, ledgerDir, stack string) (string,
 			//
 			// The two names come from different places and nothing
 			// reconciles them. `ubx plan` files a plan under the STACK
-			// THE DOCUMENT DECLARES (intent.Stack, which for a .ubx.hcl
-			// file is its own `stack = "..."` attribute). Bare `ubx ship`
+			// THE DOCUMENT DECLARES (intent.Stack, which an SDK program
+			// declares in its own source). Bare `ubx ship`
 			// looks it up by the stack .ubx/config declares
 			// (applyStackDefault). Those agreeing is a convention, not
 			// something enforced, and when they disagree a perfectly

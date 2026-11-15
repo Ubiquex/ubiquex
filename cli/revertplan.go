@@ -10,40 +10,37 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/core"
-	"github.com/ubiquex/ubiquex/writeback"
 )
 
 // newRevertPlanCmd is UBI-16's "revert emits plan" (docs/plan.md M3-4,
 // docs/architecture.md's Revert path): takes an already-accepted
 // drift_revert proposal and prints the reconciliation artifact a human (or
 // their own tooling) needs to actually fix cloud. It never writes a file,
-// never touches cloud, and has no --write flag at all -- unlike
-// ubx writeback, which does apply to .tf given --write. Applying the
+// never touches cloud, and has no --write flag at all. Applying the
 // correction is explicitly out of scope until the native executor earns
 // that trust; this command only ever emits.
 func newRevertPlanCmd() *cobra.Command {
 	var (
 		ledgerDir string
 		stack     string
-		tfDir     string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "revert-plan <proposal-id>",
 		Short: "Emit the reconciliation plan for an accepted drift_revert proposal -- never makes any change",
 		Long: `Emit the reconciliation plan for an accepted drift_revert proposal: a human-readable
-list of what changed and what restoring it requires, plus (with --tf-dir) a corrective .tf diff for
-whatever attributes are safely rewritable and a manual-steps section for whatever isn't.
+list of what changed and what restoring it requires.
 
-ubx revert-plan NEVER writes a file and NEVER touches cloud. Making the correction -- to .tf source,
-or to the live resource -- is the operator's own tooling to run (docs/plan.md's M3-4: "revert emits
-plan"; executor trust comes later).`,
+ubx revert-plan NEVER writes a file and NEVER touches cloud. Making the correction to the live
+resource is the operator's own tooling to run (docs/plan.md's M3-4: "revert emits plan"; executor
+trust comes later). The corrective .tf diff it once offered with --tf-dir went with writeback
+(UBI-301): there are no source files for it to correct.`,
 		Args: cobra.ExactArgs(1),
-		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0
-		// (nothing to plan, or every changed attribute got a .tf diff), 1
-		// (manual steps are needed -- a declined attribute or a resource
-		// block that couldn't be located -- an actionable finding), 2
-		// (error). SilenceUsage/Errors: same reasoning as status.go.
+		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0 (the
+		// plan was emitted, or there was nothing to plan) or 2 (error).
+		// Exit 1 meant "manual .tf steps are needed", which ended with
+		// --tf-dir (UBI-301). SilenceUsage/Errors: same reasoning as
+		// status.go.
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -51,7 +48,6 @@ plan"; executor trust comes later).`,
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("revert-plan: %w", err)}
 			}
-			applyTFDirDefault(cmd, &tfDir, cfg)
 			applyStackDefault(cmd, &stack, cfg)
 
 			// A bare proposal ID carries no stack of its own (docs/architecture.md
@@ -86,30 +82,19 @@ plan"; executor trust comes later).`,
 			out := cmd.OutOrStdout()
 			printPlan(out, p.Delta.Modifies)
 
-			if tfDir == "" {
-				fmt.Fprintln(out, "\nno --tf-dir given -- make the correction above in cloud via your own tooling; ubx never makes it for you")
-				return nil
-			}
-			manualSteps, err := printTFDiffAndManualSteps(out, tfDir, p.Delta.Modifies)
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: err}
-			}
-			if manualSteps > 0 {
-				return &ExitCodeError{Code: 1, Err: fmt.Errorf("revert-plan: %d attribute(s) need manual steps (see above)", manualSteps)}
-			}
+			fmt.Fprintln(out, "\nmake the correction above in cloud via your own tooling; ubx never makes it for you")
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().StringVar(&stack, "stack", "", "which stack's ledger to open -- required only when .ubx/config's [ledger] store is a remote store; unused for the default git store")
-	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "directory containing .tf files to compute a corrective diff against (optional) -- never written to, ubx never makes any change here")
 	return cmd
 }
 
 // printPlan prints the human-readable reconciliation plan: one line per
 // changed attribute, current (drifted) value -> restore-to (ledger-truth)
-// value. Always produced, regardless of --tf-dir.
+// value.
 func printPlan(out io.Writer, modifies []core.Modification) {
 	fmt.Fprintln(out, "--- plan ---")
 	for _, m := range modifies {
@@ -117,61 +102,6 @@ func printPlan(out io.Writer, modifies []core.Modification) {
 			fmt.Fprintf(out, "%s: %s: %s -> %s\n", m.Target, path, rawOrAbsent(m.Before[path]), rawOrAbsent(m.After[path]))
 		}
 	}
-}
-
-// printTFDiffAndManualSteps applies each modifies entry against tfDir via
-// the same writeback machinery ubx writeback uses -- fed a Modification whose
-// After is already the restore target, so no changes to writeback itself are
-// needed; "reverse direction" describes the semantic meaning (the file
-// moves back toward original truth), not a different code path. Every
-// applied attribute prints as a diff; every declined attribute, and every
-// modifies entry whose resource block isn't found in tfDir at all, is
-// collected into a manual-steps section instead of failing the command --
-// a revert can legitimately target a resource that was only ever adopted
-// via `ubx scan`, never written to .tf. Returns the number of manual-steps
-// entries (declined + not-found), so the caller can classify the UBI-20
-// exit code -- any manual step needed is an actionable finding, not a
-// clean pass.
-func printTFDiffAndManualSteps(out io.Writer, tfDir string, modifies []core.Modification) (int, error) {
-	var declined []writeback.DeclinedAttribute
-	var notFound []string
-	anyDiff := false
-
-	for _, m := range modifies {
-		path, newContent, report, err := writeback.FindAndApply(tfDir, m.Target, m)
-		if err != nil {
-			notFound = append(notFound, fmt.Sprintf("%s: %v", m.Target, err))
-			continue
-		}
-		declined = append(declined, report.Declined...)
-		if len(report.Applied) == 0 {
-			continue
-		}
-		if !anyDiff {
-			fmt.Fprintln(out, "\n--- .tf diff ---")
-			anyDiff = true
-		}
-		diff, err := unifiedDiff(path, newContent)
-		if err != nil {
-			return 0, fmt.Errorf("revert-plan: diff %s: %w", path, err)
-		}
-		fmt.Fprintln(out, diff)
-	}
-
-	if len(declined) > 0 || len(notFound) > 0 {
-		fmt.Fprintln(out, "\n--- manual steps ---")
-		for _, nf := range notFound {
-			fmt.Fprintf(out, "%s -- make this correction manually\n", nf)
-		}
-		for _, d := range declined {
-			fmt.Fprintf(out, "%s -- %s", d.Path, d.Reason)
-			if d.Expression != "" {
-				fmt.Fprintf(out, " (current value: %s)", d.Expression)
-			}
-			fmt.Fprintln(out, " -- make this correction manually")
-		}
-	}
-	return len(declined) + len(notFound), nil
 }
 
 // sortedAttributePaths returns the union of before/after's dot-paths,

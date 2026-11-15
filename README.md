@@ -40,11 +40,9 @@ current behavior, never the other way around.
   the three runtime submodules, TypeScript/Go/Python)
 - `blueprint/`: reusable, parameterized proposal templates (Ubxfile
   parsing, per-language codegen)
-- `writeback/`: surgical `.tf`/diagram/markdown edits (`ubx writeback`)
 - `github/`: acceptance derivation from a real, reviewed pull request
 - `audit/`: per-cloud drift/genesis attribution backends
 - `conformance/`: per-type registry and adversarial test harness
-- `diagram/`, `mdrender/`: the D2 diagram and markdown authoring mediums
 - `docs/`: architecture, schema constitution, plan, session prompts
 
 See `docs/source-tree.md` for the full, real package-by-package layout.

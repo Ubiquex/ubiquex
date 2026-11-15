@@ -2,6 +2,13 @@
 
 ## Changelog
 
+- 2026-11-15 -- UBI-301: `writeback`, `hclstack`, `diagram` and
+  `mdrender` are removed, with `ubx writeback`, `revert-plan --tf-dir`,
+  `scan --surface-as`'s `.tf` preview, `tf_dir`, `.ubx.hcl` in `ubx plan`
+  and `ubx resolve`, and `ubx render`'s D2 and `--md` output. `ubx render`
+  keeps override generation (`--from-drift`, `--sync-overrides`, no `--md`).
+  Ledgers holding what a `.ubx.hcl` call produced still read and verify. No
+  ledger type changed. See docs/architecture.md's UBI-301 amendment.
 - 2026-09-09 -- `ubx_history` is the ninth MCP tool. An MCP session
   concluded a ledger was empty when it held two proposals: `ubx_status`
   reports the current fold, a created-then-destroyed resource is

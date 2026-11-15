@@ -30,7 +30,7 @@
 // runtime gate.
 //
 // Boundary by omission, stated here and in --help, not left to be
-// inferred: `ubx accept`/`ship`/`writeback`/`revert-plan` (and
+// inferred: `ubx accept`/`ship`/`revert-plan` (and
 // `scan --surface-as`, which opens a real GitHub issue/PR, and
 // `blueprint push`) are deliberately NOT exposed as tools. Accepting a
 // proposal (or publishing a blueprint) is a recorded human (or
@@ -102,7 +102,7 @@ Five blueprint-authoring tools (UBI-223), independent, callable in any order:
   list_blueprints    a directory tree -> every real Ubxfile found in it
   describe_blueprint one already-known ref (git/oci/tarball/local) -> its name, params, resources
 
-Boundary by omission: ubx accept/writeback/revert-plan (and scan --surface-as, which opens a real
+Boundary by omission: ubx accept/revert-plan (and scan --surface-as, which opens a real
 GitHub issue/PR, and blueprint push) are NOT exposed here, deliberately, and no tool approves a
 proposal. Accepting a proposal (or publishing a blueprint) is a recorded human (or PR-merge-derived)
 decision -- never something an assistant does on a human's behalf mid-conversation. apply ships only

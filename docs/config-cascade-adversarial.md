@@ -1,5 +1,7 @@
 # Config cascade + formats adversarial program (UBI-32 Arc A)
 
+> **Amended (UBI-301, 2026-11-15):** `tf_dir` no longer exists. The rows below that use it as a sample key are tested with `gitlab_project` in its place; the cascade behaviour each row specifies is unchanged.
+
 > Every row here is a failure or edge case injected on purpose, with a
 > REQUIRED observable outcome — written as the spec, before any code
 > exists to pass it, the same discipline docs/multi-provider-adversarial.md,
