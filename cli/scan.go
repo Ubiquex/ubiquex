@@ -34,7 +34,6 @@ func newScanCmd() *cobra.Command {
 		surfaceAs       string
 		githubRepo      string
 		surfaceTgt      surfaceTarget
-		tfDir           string
 		propose         string
 		all             bool
 		tfstatePath     string
@@ -85,12 +84,11 @@ func newScanCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: %w", err)}
 			}
 			applyGithubRepoDefault(cmd, &githubRepo, cfg)
-			applyTFDirDefault(cmd, &tfDir, cfg)
 
 			if all {
 				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
-					cmd.Flags().Changed("surface-as") || cmd.Flags().Changed("tf-dir") {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: --type/--name/--lookup/--surface-as/--tf-dir describe a single resource " +
+					cmd.Flags().Changed("surface-as") {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: --type/--name/--lookup/--surface-as describe a single resource " +
 						"and aren't relevant to bulk onboarding")}
 				}
 				if tfstatePath == "" {
@@ -120,8 +118,8 @@ func newScanCmd() *cobra.Command {
 
 			if discover {
 				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
-					cmd.Flags().Changed("surface-as") || cmd.Flags().Changed("tf-dir") || all || tfstatePath != "" {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: --type/--name/--lookup/--surface-as/--tf-dir/--all/--tfstate describe a " +
+					cmd.Flags().Changed("surface-as") || all || tfstatePath != "" {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: --type/--name/--lookup/--surface-as/--all/--tfstate describe a " +
 						"single resource or tfstate-sourced bulk onboarding and aren't relevant to cloud-side discovery (docs/discovery.md)")}
 				}
 				tags, err := parseTagFlags(tagFlags)
@@ -206,7 +204,7 @@ func newScanCmd() *cobra.Command {
 					}
 					out2 := cmd.OutOrStdout()
 					surface = func(p *core.Proposal, addr core.Address) error {
-						return surfaceDrift(ctx, out2, p, addr, surfaceAs, surfaceTgt, tfDir)
+						return surfaceDrift(ctx, out2, p, addr, surfaceAs, surfaceTgt)
 					}
 				}
 				return runScanFleet(ctx, cmd.OutOrStdout(), st, ledger, ledgerDir, stack, propose, noAttribution, cfg, providerPath, source, providerVersion, providerConfig, surface)
@@ -422,7 +420,7 @@ func newScanCmd() *cobra.Command {
 			}
 			if adoptProposal != nil && surfaceAs != "" {
 				surfaceTgt.githubRepo = githubRepo
-				if err := surfaceDrift(ctx, out2, adoptProposal, addr, surfaceAs, surfaceTgt, tfDir); err != nil {
+				if err := surfaceDrift(ctx, out2, adoptProposal, addr, surfaceAs, surfaceTgt); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
 				}
 			}
@@ -528,7 +526,6 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&surfaceTgt.githubAPIBaseURL, "github-api-base-url", "", "a GitHub Enterprise Server instance URL, e.g. https://github.example.com (default the real api.github.com)")
 	cmd.Flags().StringVar(&surfaceTgt.gitlabAPIBaseURL, "gitlab-api-base-url", "", "a self-managed GitLab instance URL, e.g. https://gitlab.example.com (default the real gitlab.com)")
 	cmd.Flags().StringVar(&surfaceTgt.azureDevOpsAPIBaseURL, "azure-devops-api-base-url", "", "an on-prem Azure DevOps Server collection URL (default the real Azure DevOps Services)")
-	cmd.Flags().StringVar(&tfDir, "tf-dir", "", "directory of .tf files to compute a best-effort write-back preview diff from, for the receipt (optional)")
 	cmd.Flags().StringVar(&propose, "propose", "adopt", "on drift, which resolution(s) to generate: \"adopt\" (drift_adopt), \"revert\" (drift_revert), or \"both\" (no effect on a new/never-seen resource, which always generates adoption)")
 	cmd.Flags().BoolVar(&all, "all", false, "bulk onboarding: enumerate every resource in --tfstate and generate an adoption proposal for each, instead of scanning a single --type/--name resource")
 	cmd.Flags().StringVar(&tfstatePath, "tfstate", "", "path to a Terraform state v4 JSON file, read once as a bulk-onboarding enumeration source (required with --all)")

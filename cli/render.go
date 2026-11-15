@@ -6,49 +6,33 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/core"
-	"github.com/ubiquex/ubiquex/diagram"
-	"github.com/ubiquex/ubiquex/mdrender"
 )
 
-// newRenderCmd is UBI-47 slice 4's own read-only projection of ledger
-// state, extended by UBI-86 with a second output format: walk a stack's
-// own live resources and emit either the canonical D2 rendering of
-// their current, resolved shape (the default, unchanged since UBI-47),
-// or, with --md, a readable markdown "current state" document
-// (docs/render-md.md) -- both share the identical ledger read
-// (diagram.Walk), so the two formats can never disagree about WHICH
-// resources exist or how they're grouped, only how that same real data
-// is presented. A projection surface this project's own "every medium
-// is a projection, never a second source of truth" thesis promised
-// (docs/architecture.md) -- UBI-224 removed the diagram/md AUTHORING
-// mediums this once also converse'd with, never this command's own
-// output side. Never writes to the ledger, never resolves anything -- a
-// pure read, same posture `ubx status`'s own fleet walk already holds.
+// newRenderCmd generates blueprint override statements from drift
+// (UBI-86): for one drifted resource (--from-drift) or every drifted
+// resource in a stack (--sync-overrides), an override in the calling
+// stack's own SDK language. Mechanical, never AI.
 //
-// --check reuses `ubx sdk gen`'s own "regenerate, meant to be committed
-// and diffed by CI" discipline, but makes the diff-and-fail step a real,
-// first-class command mode rather than leaving it to `git diff` outside
-// the tool -- docs/diagram-medium.md's own explicit "render --check"
-// contract: re-emit, byte-compare against --out's own current committed
-// content, exit non-zero on any difference. Format-agnostic: it operates
-// on rendered bytes, whichever format produced them. This is a real
-// "finding," not a hard error (UBI-20, docs/exit-codes.mdx): exit 1 (the
-// committed rendered/ copy is stale -- re-run without --check and commit
-// the result), exit 2 (a real error -- bad ledger, bad stack).
+// It used to be the command's secondary mode. Its primary one was a
+// projection of current state, the canonical D2 diagram or, with --md, a
+// markdown document, with --check/--out for committing a render and
+// diffing it in CI. Those went with the diagram and mdrender packages
+// (UBI-301): with the agent authoring and the ledger recording, nobody
+// was left to read a committed projection. Override generation stays
+// because it was never about the projection. It sat behind --md only
+// because it grew out of the markdown medium, and it now stands on its
+// own flags. Whether it belongs here, or anywhere, is part of the open
+// blueprint question.
 func newRenderCmd() *cobra.Command {
 	var (
 		ledgerDir       string
 		stack           string
-		out             string
-		check           bool
-		md              bool
 		fromDrift       string
 		syncOverrides   bool
 		providerPath    string
@@ -60,22 +44,16 @@ func newRenderCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:           "render",
-		Short:         "Emit the canonical D2 diagram (default) or, with --md, a readable markdown current-state document",
+		Short:         "Generate blueprint override statements from drift, in the calling stack's own SDK language",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if check && out == "" {
-				return &ExitCodeError{Code: 2, Err: errors.New("render: --check requires --out (the committed file to compare against)")}
-			}
 			if fromDrift != "" && syncOverrides {
 				return &ExitCodeError{Code: 2, Err: errors.New("render: --from-drift and --sync-overrides are mutually exclusive")}
 			}
-			if (fromDrift != "" || syncOverrides) && !md {
-				return &ExitCodeError{Code: 2, Err: errors.New("render: --from-drift/--sync-overrides require --md")}
-			}
-			if (fromDrift != "" || syncOverrides) && check {
-				return &ExitCodeError{Code: 2, Err: errors.New("render: --check has no meaning together with --from-drift/--sync-overrides")}
+			if fromDrift == "" && !syncOverrides {
+				return &ExitCodeError{Code: 2, Err: errors.New("render: pass --from-drift <address> for one drifted resource, or --sync-overrides for every drifted resource in the stack")}
 			}
 
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
@@ -84,18 +62,11 @@ func newRenderCmd() *cobra.Command {
 			}
 			applyStackDefault(cmd, &stack, cfg)
 			if stack == "" {
-				return &ExitCodeError{Code: 2, Err: errors.New("render: --stack is required -- a render always covers exactly one stack")}
+				return &ExitCodeError{Code: 2, Err: errors.New("render: --stack is required -- override generation always covers exactly one stack")}
 			}
-			if fromDrift != "" || syncOverrides {
-				// UBI-86: --from-drift/--sync-overrides are the only render
-				// mode that ever launches a provider -- apply the SAME
-				// config-file default `ubx status --drift`/`ubx resolve`
-				// already do (a bare `.ubx/config` [provider] table needs
-				// no --provider flag repeated at every call site).
-				applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
-				if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("render: %w", err)}
-				}
+			applyProviderDefaults(cmd, &providerPath, &source, &providerVersion, cfg)
+			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("render: %w", err)}
 			}
 
 			ledger, closeLedger, err := openLedgerForStack(cmd.Context(), ledgerDir, stack, cfg)
@@ -104,84 +75,23 @@ func newRenderCmd() *cobra.Command {
 			}
 			defer closeLedger()
 
-			outWriter := cmd.OutOrStdout()
-
-			// UBI-86 Part 2: a genuinely different render mode -- not the
-			// current-state document at all, but a MECHANICAL (zero AI,
-			// item 10's own confirmed requirement) override-statement
-			// generator, templated from real status --drift comparison
-			// data (scanDrift, drift.go -- the SAME core.RunScan/
-			// DiffAttributes/FilterNormalizationNoise mechanism `ubx
-			// status --drift` itself uses, never a second drift
-			// algorithm) into whichever medium the calling stack is
-			// authored in (autodetectMedium, plan.go's own established
-			// auto-detection, reused unchanged).
-			if fromDrift != "" || syncOverrides {
-				return runRenderOverrideGeneration(cmd, outWriter, ledger, cfg, ledgerDir, stack, fromDrift,
-					providerPath, source, providerVersion, providerConfig, timeout)
-			}
-
-			var rendered []byte
-			if md {
-				rendered, err = mdrender.Emit(ledger, stack)
-			} else {
-				rendered, err = diagram.Emit(ledger, stack)
-			}
-			if err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("render: %w", err)}
-			}
-
-			if check {
-				committed, err := os.ReadFile(out)
-				if err != nil {
-					if os.IsNotExist(err) {
-						return &ExitCodeError{Code: 1, Err: fmt.Errorf("render --check: %s does not exist yet -- run \"ubx render --stack %s --out %s\" and commit the result", out, stack, out)}
-					}
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("render --check: %w", err)}
-				}
-				if bytes.Equal(committed, rendered) {
-					fmt.Fprintf(outWriter, "render --check: %s matches the current resolved state\n", out)
-					return nil
-				}
-				diff, err := unifiedDiff(out, rendered)
-				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("render --check: %w", err)}
-				}
-				fmt.Fprintln(outWriter, diff)
-				return &ExitCodeError{Code: 1, Err: fmt.Errorf("render --check: %s is stale -- re-run \"ubx render --stack %s --out %s\" and commit the result", out, stack, out)}
-			}
-
-			if out == "" {
-				outWriter.Write(rendered)
-				return nil
-			}
-			if err := os.WriteFile(out, rendered, 0o644); err != nil {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("render: %w", err)}
-			}
-			fmt.Fprintf(outWriter, "wrote %s\n", out)
-			return nil
+			return runRenderOverrideGeneration(cmd, cmd.OutOrStdout(), ledger, cfg, ledgerDir, stack, fromDrift,
+				providerPath, source, providerVersion, providerConfig, timeout)
 		},
 	}
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
-	cmd.Flags().StringVar(&stack, "stack", "", "which stack to render -- required (a render always covers exactly one stack)")
-	cmd.Flags().StringVar(&out, "out", "", "write the rendered file here instead of stdout")
-	cmd.Flags().BoolVar(&check, "check", false, "don't write -- byte-compare the freshly emitted render against --out's own current content, exiting 1 on any difference (requires --out)")
-	cmd.Flags().BoolVar(&md, "md", false, "emit a readable markdown current-state document instead of the default D2 diagram")
-	cmd.Flags().StringVar(&fromDrift, "from-drift", "", "generate a single override statement for one drifted resource's own address, in the calling stack's own SDK language (requires --md; mutually exclusive with --sync-overrides)")
-	cmd.Flags().BoolVar(&syncOverrides, "sync-overrides", false, "walk the whole stack's drift and generate an override statement for every drifted resource, in the calling stack's own SDK language (requires --md; mechanical, zero AI)")
-	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary (mutually exclusive with --source; only used with --from-drift/--sync-overrides)")
-	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version; only used with --from-drift/--sync-overrides)")
-	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source; only used with --from-drift/--sync-overrides)")
-	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider (only used with --from-drift/--sync-overrides)")
-	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the drift scan (only used with --from-drift/--sync-overrides)")
+	cmd.Flags().StringVar(&stack, "stack", "", "which stack -- required (override generation always covers exactly one stack)")
+	cmd.Flags().StringVar(&fromDrift, "from-drift", "", "generate a single override statement for one drifted resource's own address, in the calling stack's own SDK language (mutually exclusive with --sync-overrides)")
+	cmd.Flags().BoolVar(&syncOverrides, "sync-overrides", false, "walk the whole stack's drift and generate an override statement for every drifted resource, in the calling stack's own SDK language (mechanical, zero AI)")
+	cmd.Flags().StringVar(&providerPath, "provider", "", "path to the provider binary (mutually exclusive with --source)")
+	cmd.Flags().StringVar(&source, "source", "", "provider source address, e.g. hashicorp/aws (mutually exclusive with --provider; requires --provider-version)")
+	cmd.Flags().StringVar(&providerVersion, "provider-version", "", "explicit provider version to acquire (required with --source)")
+	cmd.Flags().StringVar(&providerConfig, "provider-config", "{}", "JSON object configuring the provider")
+	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the drift scan")
 	return cmd
 }
 
-// runRenderOverrideGeneration is `ubx render --from-drift`/`--sync-
-// overrides`'s own RunE body -- split out of newRenderCmd's own closure
-// purely for readability (this is a genuinely different render mode, not
-// a variation on the current-state document one above it).
 func runRenderOverrideGeneration(
 	cmd *cobra.Command,
 	outWriter io.Writer,

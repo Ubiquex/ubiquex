@@ -17,7 +17,6 @@ import (
 	"github.com/ubiquex/ubiquex/blueprint"
 	"github.com/ubiquex/ubiquex/core"
 	"github.com/ubiquex/ubiquex/core/resolver"
-	"github.com/ubiquex/ubiquex/hclstack"
 )
 
 // newPlanCmd is UBI-49's own terraform-shaped fusion of propose+resolve+
@@ -58,19 +57,17 @@ func newPlanCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "plan [intent-file]",
-		Short: "Resolve an intent file, an SDK program, or a .ubx.hcl blueprint-calling file into a draft proposal, render its full receipt, and save it as a hash-addressed plan for `ubx ship`",
+		Short: "Resolve an intent file or an SDK program into a draft proposal, render its full receipt, and save it as a hash-addressed plan for `ubx ship`",
 		Long: `Fuses "ubx propose" + "ubx resolve" + a preview render into one command -- the
 terraform-shaped, two-step half of this project's own workflow (plan, then "ubx ship <hash>").
 
-One file argument, dispatched by its own extension: an ubx:intent/v1 file, a
+One file argument, dispatched by its own extension: an ubx:intent/v1 file, or a
 TypeScript, Go or Python SDK program (.ts/.go/.py) evaluated through the same evaluator
-"ubx resolve" uses, or a .ubx.hcl blueprint-calling file, which is parsed rather than
-evaluated so no code runs.
+"ubx resolve" uses.
 
-Bare "ubx plan" with no argument finds the entry file itself: stack.ts, stack.go,
-stack.py or stack.ubx.hcl if one is there, otherwise the only SDK program in the
-directory. Two conventional entries in different media are refused rather than ranked,
-since one evaluates code and the other only parses.
+Bare "ubx plan" with no argument finds the entry file itself: stack.ts, stack.go or
+stack.py if one is there, otherwise the only SDK program in the directory. Two
+conventional entries in different languages are refused rather than ranked.
 
 The result resolves through the identical, unmodified core/resolver.Resolve every other entry
 point already uses -- same invariants, same orphan/pin checks, same failure modes. Its full
@@ -93,7 +90,7 @@ propose-time PR trailer hash, etc.).`,
 			// Promoted before the mutual-exclusion check below, so passing
 			// both an argument and --from-code still errors rather than
 			// silently preferring one.
-			if fromCode == "" && len(args) == 1 && sdkEntryFile(args[0], true) {
+			if fromCode == "" && len(args) == 1 && sdkEntryFile(args[0]) {
 				fromCode = args[0]
 				args = nil
 			}
@@ -129,7 +126,7 @@ propose-time PR trailer hash, etc.).`,
 					// because the fix is a decision about which medium the
 					// stack is authored in, not tidying up.
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf(
-						"plan: %s each name this stack's entry point, in different authoring media -- ubx will not choose between them, since one evaluates code and the other only parses; keep the one this stack is authored in, or name the file explicitly",
+						"plan: %s each name this stack's entry point, in different languages -- ubx will not choose between them; keep the one this stack is authored in, or name the file explicitly",
 						strings.Join(conflicting, " and "))}
 				default:
 					switch len(candidates) {
@@ -203,24 +200,6 @@ propose-time PR trailer hash, etc.).`,
 			// and keeps today's strictness exactly.
 			var generated bool
 			switch {
-			case isHCLStackFile(fromCode):
-				// A .ubx.hcl file is parsed, never evaluated: no code runs,
-				// so there is no receipts/blueprintRefs output and nothing
-				// to stamp. The identical branch `ubx resolve` has always
-				// had (UBI-226), shared here rather than reimplemented.
-				//
-				// plan refused this medium outright until now, which made
-				// the front door the one command that could not plan a
-				// whole authoring medium. Widening it is the same asymmetry
-				// the positional form fixed.
-				parsed, err := hclstack.Parse(fromCode)
-				if err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
-				}
-				ctx = relockForHCLStack(ctx, stackForLock(cmd, cfg), parsed)
-				intent = *parsed
-				sourceLabel = fromCode
-				generated = true
 			case fromCode != "":
 				canon, receipts, blueprintRefs, err := evaluateSDKProgram(ctx, fromCode)
 				if err != nil {
@@ -271,13 +250,6 @@ propose-time PR trailer hash, etc.).`,
 				if err != nil {
 					return &ExitCodeError{Code: 2, Err: err}
 				}
-				if looksLikeHCL(args[0], data) {
-					// Reaching the intent-file reader with HCL used to
-					// report "invalid character 's' looking for beginning of
-					// value", a JSON parse error about a file that was never
-					// JSON. It named the wrong problem entirely.
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %s looks like HCL but is not named *.ubx.hcl -- a blueprint-calling file has to carry that exact suffix to be parsed as one, and anything else is read as an ubx:intent/v1 JSON document", args[0])}
-				}
 				if err := json.Unmarshal(data, &intent); err != nil {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: parse intent file: %w", err)}
 				}
@@ -292,8 +264,7 @@ propose-time PR trailer hash, etc.).`,
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("plan: %w", err)}
 			}
 			// Every pull gets a visible receipt, the same discipline a
-			// declared dependency already had. An HCL call used to pull
-			// with no receipt at all.
+			// declared dependency already had.
 			for _, r := range callReceipts {
 				fmt.Fprintln(cmd.OutOrStdout(), r)
 			}
@@ -457,15 +428,6 @@ func autodetectMedium(dir string) ([]detectedMedium, error) {
 		}
 		name := e.Name()
 		path := filepath.Join(dir, name)
-		if isHCLStackFile(name) {
-			// No content sniffing here, unlike the three SDK languages. A
-			// .ubx.hcl file carries no import to look for -- it is parsed,
-			// not run -- and the double extension is itself the marker: no
-			// file is named .ubx.hcl by accident the way a stray .go file
-			// lands in a Go module.
-			found = append(found, detectedMedium{path: path})
-			continue
-		}
 		switch ext := strings.ToLower(filepath.Ext(name)); ext {
 		case ".ts", ".go", ".py":
 			marker := sdkImportMarkers[ext]
@@ -837,17 +799,11 @@ func resolveAcceptedProposal(ledger *core.Ledger, ref string) (*core.Proposal, e
 const conventionalEntryBase = "stack"
 
 // conventionalEntrySuffixes are the exact file names bare `ubx plan`
-// prefers, one per authoring medium.
-//
-// ".ubx.hcl" is why this is a suffix list rather than a base name plus
-// filepath.Ext. It is a DOUBLE extension, so TrimSuffix(name, Ext(name))
-// yields "stack.ubx", not "stack", and the original check silently
-// failed to match the one medium it was later asked to cover.
+// prefers, one per SDK language.
 var conventionalEntrySuffixes = []string{
 	conventionalEntryBase + ".ts",
 	conventionalEntryBase + ".go",
 	conventionalEntryBase + ".py",
-	conventionalEntryBase + ".ubx.hcl",
 }
 
 // isConventionalEntry reports whether path's base name is one of them.
@@ -859,29 +815,6 @@ func isConventionalEntry(path string) bool {
 		}
 	}
 	return false
-}
-
-// isHCLStackFile reports whether path is a .ubx.hcl blueprint-calling
-// file, the one medium that is parsed rather than evaluated.
-func isHCLStackFile(path string) bool {
-	return strings.HasSuffix(strings.ToLower(path), ".ubx.hcl")
-}
-
-// looksLikeHCL is a last-resort check for a file that reached the
-// intent-file reader and is plainly not JSON. Deliberately narrow: an
-// intent/v1 document always starts with "{", so anything with a .hcl
-// extension or an HCL-shaped first token is worth naming rather than
-// letting a JSON decoder describe.
-func looksLikeHCL(path string, data []byte) bool {
-	if strings.HasSuffix(strings.ToLower(path), ".hcl") {
-		return true
-	}
-	trimmed := strings.TrimSpace(string(data))
-	if trimmed == "" || strings.HasPrefix(trimmed, "{") {
-		return false
-	}
-	return strings.HasPrefix(trimmed, "stack ") || strings.HasPrefix(trimmed, "stack=") ||
-		strings.HasPrefix(trimmed, "blueprint ")
 }
 
 // conventionalEntry picks the conventional entry file out of candidates,
@@ -903,11 +836,9 @@ func conventionalEntry(candidates []detectedMedium) (string, []string, bool) {
 		return "", nil, false
 	default:
 		// More than one conventional entry is a genuine ambiguity and gets
-		// refused, never resolved by precedence. stack.ts and
-		// stack.ubx.hcl are not two spellings of one stack: they are two
-		// different authoring media, and one of them runs code while the
-		// other only parses. Any fixed precedence would mean a user who
-		// adds a second file silently changes which one ships.
+		// refused, never resolved by precedence. stack.ts and stack.go are
+		// not two spellings of one stack. Any fixed precedence would mean
+		// a user who adds a second file silently changes which one ships.
 		sort.Strings(conventional)
 		return "", conventional, false
 	}
@@ -929,19 +860,8 @@ func conventionalEntryNames() string {
 // distinguished nothing: every non-intent-file input was an SDK program.
 // A flag whose only job is to say "this argument is the kind of argument
 // it obviously is" is a flag worth not typing.
-//
-// allowHCL follows each command's own existing contract rather than
-// unifying them behind this change's back: `ubx resolve --from-code`
-// has always accepted a .ubx.hcl blueprint-calling file, and `ubx plan
-// --from-code` has always rejected one. Widening plan's accepted set is
-// a real behaviour change with its own argument to make, not a
-// side effect of dropping a flag.
-func sdkEntryFile(path string, allowHCL bool) bool {
-	lower := strings.ToLower(path)
-	if allowHCL && strings.HasSuffix(lower, ".ubx.hcl") {
-		return true
-	}
-	switch filepath.Ext(lower) {
+func sdkEntryFile(path string) bool {
+	switch filepath.Ext(strings.ToLower(path)) {
 	case ".ts", ".go", ".py":
 		return true
 	}
@@ -976,27 +896,6 @@ func omittedAttributesNote(generated bool, modifies int) string {
 // "" is a legitimate answer for a stack that declares no blueprints, and
 // costs nothing: the lock is only consulted for declared dependencies,
 // and a stack with none never reaches it.
-//
-// An HCL document is the one case where the document's own stack IS
-// knowable in time, because it is parsed rather than run and the parse
-// happens before any blueprint is pulled. relockForHCLStack uses that,
-// since "" would otherwise put every HCL document in a directory into
-// one lock bucket where each plan prunes the others' entries.
-// relockForHCLStack re-keys the lock policy on an HCL document's own
-// declared stack.
-//
-// Only when nothing more specific was given: an explicit --stack still
-// wins, and so does .ubx/config's own stack key, both of which are
-// deliberate statements about which stack this is.
-func relockForHCLStack(ctx context.Context, current string, parsed *resolver.IntentFile) context.Context {
-	if current != "" || parsed == nil || parsed.Stack == "" {
-		return ctx
-	}
-	p := blueprint.LockPolicyFrom(ctx)
-	p.Stack = parsed.Stack
-	return blueprint.WithLockPolicy(ctx, p)
-}
-
 func stackForLock(cmd *cobra.Command, cfg *Config) string {
 	if v, err := cmd.Flags().GetString("stack"); err == nil && v != "" {
 		return v

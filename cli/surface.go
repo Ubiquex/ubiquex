@@ -14,7 +14,6 @@ import (
 	bbserver "github.com/ubiquex/ubiquex/vcs/bitbucketserver"
 	ghub "github.com/ubiquex/ubiquex/vcs/github"
 	glab "github.com/ubiquex/ubiquex/vcs/gitlab"
-	"github.com/ubiquex/ubiquex/writeback"
 )
 
 // surfaceTarget names the one real repository, on one real platform,
@@ -82,7 +81,7 @@ func (t surfaceTarget) selected() (platform string, err error) {
 // The receipt itself is byte-identical across all five platforms
 // (buildReceipt): the platforms differ in how they take it, never in
 // what it says.
-func surfaceDrift(ctx context.Context, out io.Writer, p *core.Proposal, addr core.Address, surfaceAs string, target surfaceTarget, tfDir string) error {
+func surfaceDrift(ctx context.Context, out io.Writer, p *core.Proposal, addr core.Address, surfaceAs string, target surfaceTarget) error {
 	platform, err := target.selected()
 	if err != nil {
 		return err
@@ -91,7 +90,6 @@ func surfaceDrift(ctx context.Context, out io.Writer, p *core.Proposal, addr cor
 		return fmt.Errorf("--surface-as must be \"issue\" or \"pr\", got %q", surfaceAs)
 	}
 
-	diffPreview := driftDiffPreview(p, tfDir)
 	title := fmt.Sprintf("drift: %s", addr)
 
 	hash, err := core.Hash(p)
@@ -110,8 +108,8 @@ func surfaceDrift(ctx context.Context, out io.Writer, p *core.Proposal, addr cor
 	// is no acceptance to derive from one. prReceipt carries the real
 	// ubx-proposal trailer, which is exactly what makes `ubx accept
 	// --from-merge` work once a human merges the result.
-	issueReceipt := buildReceipt(p, "", diffPreview)
-	prReceipt := buildReceipt(p, hash, diffPreview)
+	issueReceipt := buildReceipt(p, "")
+	prReceipt := buildReceipt(p, hash)
 
 	switch platform {
 	case "github":
@@ -250,34 +248,4 @@ func surfaceDrift(ctx context.Context, out io.Writer, p *core.Proposal, addr cor
 		fmt.Fprintf(out, "opened pull request %s\n", pr.HTMLURL)
 		return nil
 	}
-}
-
-// driftDiffPreview computes a best-effort ".tf write-back would do this"
-// preview for the receipt — if tfDir is empty, or writeback can't find/apply
-// a match (no .tf files given, resource block absent, etc.), the preview
-// is simply omitted rather than failing drift surfacing over an optional
-// enrichment. Reuses writeback.FindAndApply exactly as `ubx writeback` does;
-// nothing here requires the proposal to be accepted first, since this is
-// purely a dry-run preview, never a real write (writeback.FindAndApply
-// itself never touches disk — only cli/writeback.go's own --write flag
-// does that).
-func driftDiffPreview(p *core.Proposal, tfDir string) string {
-	if tfDir == "" || len(p.Delta.Modifies) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, m := range p.Delta.Modifies {
-		path, newContent, _, err := writeback.FindAndApply(tfDir, m.Target, m)
-		if err != nil {
-			fmt.Fprintf(&b, "(no .tf preview for %s: %v)\n", m.Target, err)
-			continue
-		}
-		diff, err := unifiedDiff(path, newContent)
-		if err != nil {
-			fmt.Fprintf(&b, "(no .tf preview for %s: %v)\n", m.Target, err)
-			continue
-		}
-		b.WriteString(diff)
-	}
-	return strings.TrimSpace(b.String())
 }

@@ -22,8 +22,8 @@ import (
 // is a single `attr.Expr.Value(nil)` call per top-level attribute --
 // that call already recurses through an entire object-constructor
 // expression, so it proves a whole table's every nested value is a
-// literal in one shot, matching writeback/literal.go's own technique on
-// resource attributes.
+// literal in one shot, the technique the writeback package (removed in
+// UBI-301) used on resource attributes.
 func parseHCLGeneric(path string) (genericTree, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

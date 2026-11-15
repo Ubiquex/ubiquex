@@ -254,7 +254,7 @@ func TestBlueprintCall_ResolveAcceptShip_RealFakeProvider(t *testing.T) {
 // ALSO carries the same {"kind":"blueprint","ref":"<name>:sha256:..."}
 // per-resource provenance a diagram/md call already gets from
 // blueprint.ExpandCalls (Slice 6) -- confirmed directly against the real
-// resolved JSON, not inferred from `ubx why`/`ubx render`'s own
+// resolved JSON, not inferred from `ubx why`'s own
 // downstream rendering (those are already proven to render whatever
 // `sources` they're given correctly; this test's own job is confirming
 // `sources` genuinely gets THERE for a direct-SDK call, which it never
@@ -322,7 +322,7 @@ func TestBlueprintCall_DirectSDKImport_HasBlueprintProvenance(t *testing.T) {
 	}
 }
 
-// TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance is
+// TestBlueprintCall_DirectSDKImport_WhyShowsProvenance is
 // UBI-126's own end-to-end success-bar proof, one level past resolve:
 // not just that the resolved JSON carries "sources", but that `ubx why`
 // and `ubx render` -- run for real, against a real shipped ledger --
@@ -333,7 +333,7 @@ func TestBlueprintCall_DirectSDKImport_HasBlueprintProvenance(t *testing.T) {
 // TestBlueprintCall_ResolveAcceptShip_RealFakeProvider already proves,
 // carried one step further into the two commands a real user would
 // actually run to inspect provenance.
-func TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance(t *testing.T) {
+func TestBlueprintCall_DirectSDKImport_WhyShowsProvenance(t *testing.T) {
 	requireHermeticSandbox(t)
 	dir := t.TempDir()
 	ledgerDir := t.TempDir()
@@ -363,16 +363,6 @@ func TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance(t *testing.T) 
 		t.Fatalf("ubx why on a direct-SDK-imported blueprint's own resource is missing provenance -- the UBI-126 gap, unfixed:\n%s", whyOut)
 	}
 
-	renderOut, err := runUbx(t, nil, "render", "--stack", "platform", "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx render: %v\noutput: %s", err, renderOut)
-	}
-	if !strings.Contains(renderOut, "style.stroke-dash: 3") {
-		t.Fatalf("ubx render on a direct-SDK-imported blueprint's own resources is missing the dashed-border grouping -- the UBI-126 gap, unfixed:\n%s", renderOut)
-	}
-	if !strings.Contains(renderOut, `"primary"`) || !strings.Contains(renderOut, `"mirror"`) {
-		t.Fatalf("ubx render missing one of the blueprint's own resources:\n%s", renderOut)
-	}
 }
 
 // TestBlueprintCall_DefaultOverride_ResolveUnchanged proves the calling

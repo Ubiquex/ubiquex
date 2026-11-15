@@ -52,7 +52,8 @@ func writeGoSchemaCaller(scratch, blueprintDir, stackName, summary string, s *Sc
 		return "", err
 	}
 	// The blueprint's OWN go.mod, not the calling stack's. A stack that
-	// calls a Go blueprint from .ubx.hcl has no go.mod and needs none:
+	// calls a Go blueprint from an intent file's blueprint_calls has no go.mod
+	// and needs none:
 	// the caller written below is a complete, self-contained module
 	// synthesized in scratch. goModDirectives names the file it read for
 	// exactly this reason, since the reader's own directory is the

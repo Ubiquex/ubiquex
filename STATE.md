@@ -7,6 +7,21 @@
 
 ## In flight
 
+**2026-11-15: writeback, `.ubx.hcl` and the state projections removed
+(UBI-301).**
+- **Gone:** the `writeback`, `hclstack`, `diagram` and `mdrender` packages;
+  `ubx writeback`; `revert-plan --tf-dir`; `scan --surface-as`'s `.tf`
+  preview; `tf_dir`; `.ubx.hcl` in `plan` and `resolve`; and `ubx render`'s
+  D2 and `--md` output.
+- **Kept:** `ubx render --from-drift`/`--sync-overrides` (override
+  generation), now without `--md`.
+- **History still reads:** no ledger type changed. A `.ubx.hcl` call's
+  records read, verify, render and explain themselves, pinned by
+  `cli/ledger_hcl_history_test.go` against a hand-written entry.
+- **Test key:** the config-cascade tests that used `tf_dir` as a stand-in
+  now use `gitlab_project`. UBI-300 will need another stand-in if it
+  removes that key.
+
 **2026-11-15: a renderer for a pending proposal (UBI-296).**
 `core.RenderProposal` renders a pending proposal's hashed content
 deterministically, for a human deciding whether to accept it. Golden file

@@ -370,7 +370,7 @@ func joinProvenancePath(base, key string) string {
 // provider_configs, whose keys are provider-defined, not ubx-defined)
 // and never checked below its own top-level table name.
 var knownTopLevelKeys = map[string]bool{
-	"stack": true, "github_repo": true, "tf_dir": true,
+	"stack": true, "github_repo": true,
 	"provider": true, "provider_config": true,
 	"providers": true, "thirdparty_providers": true, "provider_configs": true,
 	"dynamic_providers": true, "dynamic_provider_groups": true,

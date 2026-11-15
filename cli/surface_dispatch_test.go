@@ -135,7 +135,7 @@ func TestSurfaceDrift_DispatchesToEveryPlatformsOwnIssueEndpoint(t *testing.T) {
 			srv := newSurfaceServer(t, rec)
 			var out bytes.Buffer
 
-			if err := surfaceDrift(context.Background(), &out, surfaceTestProposal(), addr, "issue", tt.target(srv.URL), ""); err != nil {
+			if err := surfaceDrift(context.Background(), &out, surfaceTestProposal(), addr, "issue", tt.target(srv.URL)); err != nil {
 				t.Fatalf("surfaceDrift: %v", err)
 			}
 			if !rec.hit(tt.wantPath) {
@@ -160,7 +160,7 @@ func TestSurfaceDrift_BitbucketServerIssueRefused(t *testing.T) {
 
 	err := surfaceDrift(context.Background(), &out, surfaceTestProposal(),
 		core.Address{Stack: "payments", Type: "fake_widget", Name: "w"}, "issue",
-		surfaceTarget{bitbucketServerURL: srv.URL, bitbucketServerProject: "INFRA/infra"}, "")
+		surfaceTarget{bitbucketServerURL: srv.URL, bitbucketServerProject: "INFRA/infra"})
 	if err == nil {
 		t.Fatal("expected --surface-as issue to be refused for Bitbucket Server")
 	}
@@ -185,7 +185,7 @@ func TestSurfaceDrift_RejectsAmbiguousAndMissingTargets(t *testing.T) {
 	var out bytes.Buffer
 
 	t.Run("none", func(t *testing.T) {
-		err := surfaceDrift(context.Background(), &out, surfaceTestProposal(), addr, "issue", surfaceTarget{}, "")
+		err := surfaceDrift(context.Background(), &out, surfaceTestProposal(), addr, "issue", surfaceTarget{})
 		if err == nil || !strings.Contains(err.Error(), "exactly one of --github-repo") {
 			t.Fatalf("got %v, want a teaching error listing every platform flag", err)
 		}
@@ -193,7 +193,7 @@ func TestSurfaceDrift_RejectsAmbiguousAndMissingTargets(t *testing.T) {
 
 	t.Run("two", func(t *testing.T) {
 		err := surfaceDrift(context.Background(), &out, surfaceTestProposal(), addr, "issue",
-			surfaceTarget{githubRepo: "acme/infra", bitbucketCloudRepo: "acme/infra"}, "")
+			surfaceTarget{githubRepo: "acme/infra", bitbucketCloudRepo: "acme/infra"})
 		if err == nil || !strings.Contains(err.Error(), "exactly one platform") {
 			t.Fatalf("got %v, want the one-platform rule", err)
 		}
@@ -201,7 +201,7 @@ func TestSurfaceDrift_RejectsAmbiguousAndMissingTargets(t *testing.T) {
 
 	t.Run("bad surface-as", func(t *testing.T) {
 		err := surfaceDrift(context.Background(), &out, surfaceTestProposal(), addr, "wiki",
-			surfaceTarget{githubRepo: "acme/infra"}, "")
+			surfaceTarget{githubRepo: "acme/infra"})
 		if err == nil || !strings.Contains(err.Error(), `must be "issue" or "pr"`) {
 			t.Fatalf("got %v", err)
 		}

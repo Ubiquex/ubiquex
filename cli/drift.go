@@ -13,7 +13,7 @@ import (
 // last-recorded ledger state and its live, freshly-scanned state -- the
 // exact (path, before, after) triple core.DiffAttributes/
 // core.FilterNormalizationNoise already compute, unmodified: never
-// re-serialized into a display string here, since render --md's own
+// re-serialized into a display string here, since render's own
 // prose and render --sync-overrides' own per-medium override-statement
 // templating each need a different rendering of the identical fact.
 type DriftedField struct {

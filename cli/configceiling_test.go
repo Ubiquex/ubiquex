@@ -34,7 +34,7 @@ func TestCascadeCeiling_Row12_RootTrueStopsCollectionMidTree(t *testing.T) {
 	parent := filepath.Join(grandparent, "parent")
 	writeCascadeFile(t, parent, "config", `
 root = true
-tf_dir = "./terraform"
+gitlab_project = "./terraform"
 `)
 
 	child := filepath.Join(parent, "child")
@@ -48,8 +48,8 @@ tf_dir = "./terraform"
 	if rc.Config.Stack != "payments" {
 		t.Errorf("Stack = %q, want payments", rc.Config.Stack)
 	}
-	if rc.Config.TFDir != "./terraform" {
-		t.Errorf("TFDir = %q, want ./terraform (the root=true file's own other keys still apply)", rc.Config.TFDir)
+	if rc.Config.GitlabProject != "./terraform" {
+		t.Errorf("GitlabProject = %q, want ./terraform (the root=true file's own other keys still apply)", rc.Config.GitlabProject)
 	}
 	if rc.Config.GithubRepo != "" {
 		t.Errorf("GithubRepo = %q, want empty -- the grandparent, beyond the root=true ceiling, must never be read", rc.Config.GithubRepo)

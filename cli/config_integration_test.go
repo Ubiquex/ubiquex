@@ -124,55 +124,6 @@ func TestStatus_DoesNotApplyConfigStackDefault(t *testing.T) {
 	}
 }
 
-func TestWriteback_HonorsConfigTFDir(t *testing.T) {
-	tfDir := t.TempDir()
-	writeFile(t, filepath.Join(tfDir, "compute.tf"), writebackTF)
-	setUpConfig(t, `tf_dir = "`+tfDir+`"`)
-
-	ledgerDir := t.TempDir()
-	id := acceptWritebackProposal(t, ledgerDir)
-
-	out, err := runUbx(t, nil, "writeback", id, "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx writeback (no --tf-dir, config supplies one): %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "written: instance_type") {
-		t.Fatalf("expected writeback to have found and used config's tf_dir, got: %s", out)
-	}
-}
-
-func TestRevertPlan_HonorsConfigTFDir(t *testing.T) {
-	tfDir := t.TempDir()
-	writeFile(t, filepath.Join(tfDir, "compute.tf"), revertPlanTF)
-	setUpConfig(t, `tf_dir = "`+tfDir+`"`)
-
-	ledgerDir := t.TempDir()
-	id := acceptRevertPlanProposal(t, ledgerDir)
-
-	out, err := runUbx(t, nil, "revert-plan", id, "--ledger-dir", ledgerDir)
-	requireExitCode(t, err, 1, out)
-	if !strings.Contains(out, "--- .tf diff ---") {
-		t.Fatalf("expected revert-plan to have found and used config's tf_dir, got: %s", out)
-	}
-}
-
-func TestRevertPlan_CLITFDirOverridesConfig(t *testing.T) {
-	configTFDir := t.TempDir() // deliberately left empty -- must not be used
-	setUpConfig(t, `tf_dir = "`+configTFDir+`"`)
-
-	cliTFDir := t.TempDir()
-	writeFile(t, filepath.Join(cliTFDir, "compute.tf"), revertPlanTF)
-
-	ledgerDir := t.TempDir()
-	id := acceptRevertPlanProposal(t, ledgerDir)
-
-	out, err := runUbx(t, nil, "revert-plan", id, "--ledger-dir", ledgerDir, "--tf-dir", cliTFDir)
-	requireExitCode(t, err, 1, out)
-	if !strings.Contains(out, "--- .tf diff ---") {
-		t.Fatalf("expected the explicit --tf-dir to be used over config's, got: %s", out)
-	}
-}
-
 func TestLoadConfig_UnknownKeyWarningReachesStderr(t *testing.T) {
 	setUpConfig(t, `
 stack = "payments"

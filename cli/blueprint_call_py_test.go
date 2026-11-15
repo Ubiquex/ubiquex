@@ -190,12 +190,12 @@ func TestBlueprintCall_DirectSDKImport_HasBlueprintProvenance_Py(t *testing.T) {
 	}
 }
 
-// TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance_Py mirrors
-// TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance (Go)
-// exactly, one level past resolve: `ubx why`/`ubx render`, run for real
+// TestBlueprintCall_DirectSDKImport_WhyShowsProvenance_Py mirrors
+// TestBlueprintCall_DirectSDKImport_WhyShowsProvenance (Go)
+// exactly, one level past resolve: `ubx why`, run for real
 // against a real shipped ledger, show full blueprint provenance for a
 // Python direct-SDK-import call.
-func TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance_Py(t *testing.T) {
+func TestBlueprintCall_DirectSDKImport_WhyShowsProvenance_Py(t *testing.T) {
 	requireWasmtime(t)
 	dir := t.TempDir()
 	ledgerDir := t.TempDir()
@@ -225,14 +225,4 @@ func TestBlueprintCall_DirectSDKImport_WhyAndRenderShowProvenance_Py(t *testing.
 		t.Fatalf("ubx why on a Python direct-SDK-imported blueprint's own resource is missing provenance:\n%s", whyOut)
 	}
 
-	renderOut, err := runUbx(t, nil, "render", "--stack", "platform", "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx render: %v\noutput: %s", err, renderOut)
-	}
-	if !strings.Contains(renderOut, "style.stroke-dash: 3") {
-		t.Fatalf("ubx render on a Python direct-SDK-imported blueprint's own resources is missing the dashed-border grouping:\n%s", renderOut)
-	}
-	if !strings.Contains(renderOut, `"primary"`) || !strings.Contains(renderOut, `"mirror"`) {
-		t.Fatalf("ubx render missing one of the blueprint's own resources:\n%s", renderOut)
-	}
 }

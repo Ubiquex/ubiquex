@@ -1,5 +1,7 @@
 # `ubx render --md` — human-readable current-state document (UBI-86 Part 1)
 
+> **Superseded (UBI-301, 2026-11-15).** `mdrender` and `ubx render --md` are removed, and so is every output mode this document specifies. Override generation (`--from-drift`, `--sync-overrides`) survives in `ubx render` without `--md`. Kept unedited below as the historical design record.
+
 > Founder finding, real gap: `ubx status`/`blame`/`why` are all correct
 > and readable, but verb-shaped (run a command, get an answer) — there's
 > no single artifact a human can open and read top-to-bottom to

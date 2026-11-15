@@ -1330,6 +1330,8 @@ calling-stack signature visible, not just which blueprint made it.
 
 ### `ubx render`: dashed-border grouping
 
+> **Removed (UBI-301, 2026-11-15):** with `diagram` and the D2 render. Provenance is still recorded and still shown by `ubx why`.
+
 `diagram/emit.go`'s own stated principle — "no synthetic containers... no
 canonical grouping basis to invent" — is about not GUESSING at structure
 the diagram medium has no way to know. Blueprint-sourced grouping doesn't
@@ -5099,3 +5101,17 @@ situation for anyone pulling a blueprint from GitHub today. Worth being
 precise about what is lost in the meantime: `ubx blueprint pull` already
 executes blueprint code during `ExpandCalls`, so calling a blueprint has
 never been execution-free. Only description was.
+
+## Amendment (2026-11-15, UBI-301): `.ubx.hcl` and the render projections removed
+
+`.ubx.hcl` (the `hclstack` package) is gone, so a blueprint is no longer
+called from an HCL file. A hand-written intent file's own `blueprint_calls`,
+and direct SDK imports, are unaffected. Records a `.ubx.hcl` call left in a
+ledger still read, since they are ordinary creates with `kind: "blueprint"`
+sources.
+
+`ubx render`'s D2 grouping of a blueprint's resources is gone with `diagram`.
+`ubx render --md --from-drift`/`--sync-overrides` are now `ubx render
+--from-drift`/`--sync-overrides`; `--md` no longer exists. See
+docs/architecture.md's UBI-301 amendment.
+
