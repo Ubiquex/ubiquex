@@ -1,5 +1,7 @@
 # LedgerStore adversarial program (UBI-32 Arc B)
 
+> **Amended (UBI-300, 2026-11-15):** rows 13 to 16 (the PR-ceremony mirror) and every mention of `accept --from-merge` describe a path that no longer exists. The rest of the program stands.
+
 > Every row here is a failure or edge case injected on purpose, with a
 > REQUIRED observable outcome — written as the spec, before any code
 > exists to pass it, the same discipline docs/config-cascade-adversarial.md,

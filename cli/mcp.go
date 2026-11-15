@@ -30,11 +30,9 @@
 // runtime gate.
 //
 // Boundary by omission, stated here and in --help, not left to be
-// inferred: `ubx accept`/`ship`/`revert-plan` (and
-// `scan --surface-as`, which opens a real GitHub issue/PR, and
-// `blueprint push`) are deliberately NOT exposed as tools. Accepting a
-// proposal (or publishing a blueprint) is a recorded human (or
-// PR-merge-derived) decision -- never something an assistant does on a
+// inferred: `ubx accept`/`ship`/`revert-plan` (and `blueprint push`) are
+// deliberately NOT exposed as tools. Accepting a proposal (or publishing a
+// blueprint) is a recorded human decision -- never something an assistant does on a
 // human's behalf mid-conversation.
 package cli
 
@@ -102,10 +100,9 @@ Five blueprint-authoring tools (UBI-223), independent, callable in any order:
   list_blueprints    a directory tree -> every real Ubxfile found in it
   describe_blueprint one already-known ref (git/oci/tarball/local) -> its name, params, resources
 
-Boundary by omission: ubx accept/revert-plan (and scan --surface-as, which opens a real
-GitHub issue/PR, and blueprint push) are NOT exposed here, deliberately, and no tool approves a
-proposal. Accepting a proposal (or publishing a blueprint) is a recorded human (or PR-merge-derived)
-decision -- never something an assistant does on a human's behalf mid-conversation. apply ships only
+Boundary by omission: ubx accept/revert-plan (and blueprint push) are NOT exposed here,
+deliberately, and no tool approves a proposal. Accepting a proposal (or publishing a blueprint) is
+a recorded human decision -- never something an assistant does on a human's behalf mid-conversation. apply ships only
 what the ledger already shows a human accepted; the approval page, not any tool, appends acceptances.
 
 Every tool taking ledger_dir refuses a path that isn't a ubx stack root (a directory holding .ubx/)
@@ -346,12 +343,9 @@ func providerConfigJSON(m map[string]any) (string, error) {
 // --- ubx_why ---
 
 type whyToolInput struct {
-	Query            string `json:"query" jsonschema:"a resource address (<stack>.<type>.<name>) or a 64-character-hex proposal ID. A resource address returns its FULL history (every adoption and drift, newest first); a proposal ID returns one specific decision in detail, including attribution (who/when/from where) and every changed attribute."`
-	Stack            string `json:"stack,omitempty" jsonschema:"which stack's ledger to open, for a bare proposal-id query -- required only when .ubx/config's [ledger] store is a remote store (a resource-address query already names its own stack); unused for the default git store"`
-	LedgerDir        string `json:"ledger_dir,omitempty" jsonschema:"root directory of a ubx stack: the directory holding its .ubx/ (and its ledger/, once anything has been accepted). This supplies BOTH the ledger and the .ubx/config the call runs under, so naming one stack never picks up another's provider identity or ledger store. A leading ~/ is expanded against the server's home directory; a path with no .ubx/ in it is refused rather than reported as an empty ledger. Default: the server's own current directory"`
-	VerifyAcceptance bool   `json:"verify_acceptance,omitempty" jsonschema:"only meaningful with a proposal ID: re-derive a pr_merge acceptance against current git history and (if github_repo is set) the GitHub API, and report whether it still checks out"`
-	RepoDir          string `json:"repo_dir,omitempty" jsonschema:"local git working tree to verify verify_acceptance's merge commit against (default: the server's own current directory)"`
-	GithubRepo       string `json:"github_repo,omitempty" jsonschema:"owner/name of the GitHub repository, for verify_acceptance's reviewer re-check (the git-history re-check runs without it)"`
+	Query     string `json:"query" jsonschema:"a resource address (<stack>.<type>.<name>) or a 64-character-hex proposal ID. A resource address returns its FULL history (every adoption and drift, newest first); a proposal ID returns one specific decision in detail, including attribution (who/when/from where) and every changed attribute."`
+	Stack     string `json:"stack,omitempty" jsonschema:"which stack's ledger to open, for a bare proposal-id query -- required only when .ubx/config's [ledger] store is a remote store (a resource-address query already names its own stack); unused for the default git store"`
+	LedgerDir string `json:"ledger_dir,omitempty" jsonschema:"root directory of a ubx stack: the directory holding its .ubx/ (and its ledger/, once anything has been accepted). This supplies BOTH the ledger and the .ubx/config the call runs under, so naming one stack never picks up another's provider identity or ledger store. A leading ~/ is expanded against the server's home directory; a path with no .ubx/ in it is refused rather than reported as an empty ledger. Default: the server's own current directory"`
 }
 
 func registerWhyTool(server *mcp.Server) {
@@ -370,10 +364,6 @@ func registerWhyTool(server *mcp.Server) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("ubx_why: %w", err)
 		}
-		repoDir, err := mcpDir(in.RepoDir)
-		if err != nil {
-			return nil, nil, fmt.Errorf("ubx_why: repo_dir: %w", err)
-		}
 		cfg, err := loadConfigFromDir(ledgerDir, os.Stderr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("ubx_why: %w", err)
@@ -382,7 +372,7 @@ func registerWhyTool(server *mcp.Server) {
 		if stack == "" {
 			stack = cfg.Stack
 		}
-		payload, err := computeWhyJSON(ctx, cfg, ledgerDir, stack, in.Query, in.VerifyAcceptance, repoDir, in.GithubRepo)
+		payload, err := computeWhyJSON(ctx, cfg, ledgerDir, stack, in.Query)
 		if err != nil {
 			return nil, nil, err
 		}

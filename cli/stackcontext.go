@@ -22,7 +22,6 @@ type stackConfigContext struct {
 	ProviderVersion string            `json:"provider_version,omitempty"`
 	Providers       map[string]string `json:"providers,omitempty"`
 	LedgerStore     string            `json:"ledger_store,omitempty"`
-	GithubRepo      string            `json:"github_repo,omitempty"`
 }
 
 // buildStackConfigContext computes the read-only JSON blob a draft's own
@@ -40,7 +39,6 @@ func buildStackConfigContext(cfg *Config, stack string) json.RawMessage {
 		ProviderVersion: cfg.Provider.Version,
 		Providers:       cfg.ThirdpartyProviders,
 		LedgerStore:     cfg.Ledger.Store,
-		GithubRepo:      cfg.GithubRepo,
 	}
 	raw, err := json.Marshal(c)
 	if err != nil {

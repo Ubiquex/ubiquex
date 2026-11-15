@@ -381,6 +381,8 @@ that enforces process. Three stages, each independently shippable:
 
 ### PR-merge acceptance: derived, never asserted
 
+> **Removed (UBI-300, 2026-11-15):** `pr_merge` and `pr_review`, `ubx accept --from-merge` and the `vcs/` packages are gone. The records they wrote are history: they read, and `ubx verify` reports them as from a removed method. The text below is the historical design record.
+
 The organizing principle, stated once so every design choice below can be
 checked against it: **ubx never trusts a claim of acceptance — it verifies
 one.** `local` acceptance (existing) trusts the operator running `ubx
@@ -462,6 +464,8 @@ whatever process they already run, recorded faithfully by ubx afterward.
 
 ### `.tf` write-back: narrow-scope, surgical
 
+> **Removed (UBI-301, 2026-11-15):** writeback is gone. See the UBI-301 amendment.
+
 Triggered only by an *accepted* `drift_adopt` proposal — never a `change`
 or any proposal a human is still authoring; write-back records reality
 into existing source, it doesn't propose new infrastructure. Scope is
@@ -513,6 +517,8 @@ bidirectionality," not a general HCL code generator):
   merge.
 
 ### GitHub App skeleton
+
+> **Removed (UBI-300, 2026-11-15):** `ubx server` and `server/` are gone, on all five platforms. See the UBI-300 amendment.
 
 Read-only repository permissions are the security story, not an
 afterthought bolted on: because acceptance is *derived* (see above), a
@@ -3737,6 +3743,8 @@ render-side icon classing — one shared vocabulary, not two.
 
 ## Independent verification (built, UBI-38 — `ubx verify`)
 
+> **Amended (UBI-300, 2026-11-15):** `--repo-dir`, `--github-repo` and `--timeout`, and `pr_merge` re-derivation, are gone. A `pr_merge` or `pr_review` acceptance is reported as from a removed method, counted in `removed_method`, and changes no exit code.
+
 The auditor's command, and a natural gap-filler after Phase 3 (the
 authoring frontends) closed: the product's own core claim is
 "independently verifiable" — `ubx verify` makes that claim a demo rather
@@ -4366,4 +4374,59 @@ call's records are ordinary creates with `kind: "blueprint"` sources, and they
 read, verify, render, and explain themselves through `ubx why` and
 `ubx history` (`cli/ledger_hcl_history_test.go`, against a hand-written
 entry).
+
+## Amendment (2026-11-15, UBI-300): `ubx server`, `vcs/` and the pull-request acceptance methods removed
+
+ADR-level direction: approval identity belongs to a hosted service that
+holds it, and git is storage only. The pull-request workflow, in which a
+pull request opening ran a plan and posted a comment, an Approve derived
+acceptance, and a merge shipped under policy, is the wrong shape for a
+product where an agent authors and a human approves. No users and nothing
+in production, so this is deletion, not deprecation.
+
+**Removed:**
+- `server/`: the five-platform webhook daemon, and `ubx server`.
+- `vcs/`: per-platform clients and acceptance derivation.
+- The container image that ran the server (the Dockerfile).
+- `ubx accept --from-merge` and its fourteen flags.
+- `ubx why --verify-acceptance`, with `--repo-dir` and `--github-repo`.
+- `ubx_why`'s `verify_acceptance`, `repo_dir` and `github_repo` inputs.
+- `ubx verify --repo-dir`/`--github-repo`/`--timeout`.
+- `ubx scan --surface-as`, with its platform flags.
+- The config keys `github_repo`, `gitlab_project`,
+  `azure_devops_project`, `bitbucket_server_url` and
+  `bitbucket_server_project`, including from `ubx init`.
+- In `core`: `AcceptFromMerge`, `AcceptFromReview`, their input types,
+  and `ErrTrailerHashMismatch`.
+
+**History still reads.** `core.Acceptance` keeps `Platform`, `MergeSHA`,
+`PRNumber`, `ProposalFile` and `ReviewComment`, read-only. Acceptance is
+outside hashed content, so dropping them would not break the chain, but
+every old record would silently lose its merge commit and approvers on
+read, which is the "ledger that can no longer be read" this change must
+not cause.
+
+`core.RemovedAcceptanceMethod` names the two methods for readers:
+- `ubx verify` counts them as `removed_method` (not verified, not failed,
+  exit code unchanged);
+- `ubx why`, `ubx history`, `ubx blame` and `ubx stats` show the recorded
+  method marked "(removed method)";
+- JSON keeps the raw recorded value.
+
+`cli/ledger_removed_methods_test.go` pins all of it against a hand-written
+`pr_merge` and `pr_review` ledger.
+
+**`ubx stats` gap fixed while here.** It listed only `local` and `pr_merge`,
+so `loopback` and `pr_review` acceptances never appeared. It now lists
+whatever methods the ledger holds.
+
+**Read before rebuilding a hosted watcher:** `server/drift.go` (the polling
+watcher), `server/allowlist.go` (which ledgers a daemon may touch) and
+`server/stackdiscovery.go` (resolving a change to its stack) solve problems
+any hosted watcher has. They last exist at `cadaf6d`, the parent of the
+commit that removed them.
+
+**The consequence, accepted deliberately:** no remaining acceptance method
+names an approver. `local` records an unverified username; `loopback`
+records presence at a machine.
 

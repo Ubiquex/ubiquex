@@ -40,7 +40,7 @@ type StatsOptions struct {
 type StatsResult struct {
 	TotalProposals   int
 	ByKind           map[ProposalKind]int
-	AcceptanceMethod map[string]int // "local" | "pr_merge" -> count, every proposal kind
+	AcceptanceMethod map[string]int // recorded method -> count, every proposal kind
 	DriftByStack     map[string]int // drift_adopt + drift_revert count, per stack
 
 	// DriftEvents is the count of drift_adopt proposals only -- see

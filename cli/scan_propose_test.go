@@ -205,14 +205,6 @@ func TestScan_ProposeBoth_WithOutFlag_Errors(t *testing.T) {
 	}
 }
 
-func TestScan_ProposeRevert_WithSurfaceAs_Errors(t *testing.T) {
-	_, err := adoptThenDriftExpectErr(t, "--propose", "revert", "--surface-as", "issue", "--github-repo", "acme/infra")
-	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "--surface-as requires --propose adopt") {
-		t.Fatalf("expected a clear --surface-as+revert error, got: %v", err)
-	}
-}
-
 func TestScan_ProposeHasNoEffectOnNewResource(t *testing.T) {
 	ledgerDir := t.TempDir()
 	env := []string{"FAKEPROVIDER_MODE=ok-v6"}

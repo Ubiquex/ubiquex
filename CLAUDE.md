@@ -170,12 +170,8 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
 
 - Language: Go (module: `github.com/ubiquex/ubiquex`).
 - Layout: `core/` (IR, ledger, hashing), `provider/` (tfplugin client),
-  `cli/` (cobra commands), `writeback/` (surgical .tf edits), `vcs/`
-  (per-host VCS clients and PR/MR-merge acceptance derivation, one
-  subdirectory per host: `vcs/github`, `vcs/gitlab`, `vcs/bitbucketcloud`,
-  `vcs/bitbucketserver`, `vcs/azuredevops` -- UBI-220 grouped these under
-  one directory; `vcs/github`'s own real surface is broader than
-  acceptance derivation alone, see its own doc comment), `audit/`
+  `cli/` (cobra commands), `approval/` (the approval channel and its
+  loopback page), `audit/`
   (per-cloud drift/genesis attribution backends), `conformance/`
   (per-type registry + harness, test-only),
   `sdk/` (the multi-language SDK monorepo — TS/Go/Python runtimes,
@@ -189,10 +185,10 @@ its type system and graph algorithms inform v2, its syntax and CLI do not.
   `provider/tfplugin5` correctly names Terraform's own real wire
   protocol; `tfstate/` incorrectly named a file format instead of its
   own role, "import identity for onboarding" — renamed `stateimport/`).
-  Keep names short and lowercase (`audit/`, `diagram/`, `tseval/`/
+  Keep names short and lowercase (`audit/`, `approval/`, `tseval/`/
   `goeval/`/`pyeval/`). When a package implements an existing CLI verb
-  one-to-one, name it after that verb (`writeback/` implements `ubx
-  writeback`). Test: if you can't state the package's purpose in one
+  one-to-one, name it after that verb (`blueprint/` implements `ubx
+  blueprint`). Test: if you can't state the package's purpose in one
   sentence from the name alone, the name is wrong. Full audit + verdicts:
   `docs/source-tree.md`.
 - Determinism is a feature: anything feeding a hash must have canonical,

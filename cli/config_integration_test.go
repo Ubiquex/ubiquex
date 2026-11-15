@@ -56,7 +56,7 @@ func TestScan_CLIStackOverridesConfig(t *testing.T) {
 }
 
 func TestScan_MissingStackErrorsWhenNeitherCLINorConfigSupplyOne(t *testing.T) {
-	setUpConfig(t, `github_repo = "acme/infra"`) // present, but no stack key
+	setUpConfig(t, "[k8s_audit]\ncluster = \"acme\"\n") // present, but no stack key
 	_, err := runUbx(t, nil, "scan",
 		"--provider", fakeProviderBinary,
 		"--type", "fake_widget",

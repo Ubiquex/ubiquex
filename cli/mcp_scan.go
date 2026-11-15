@@ -13,9 +13,8 @@ import (
 
 // scanJSONOptions is computeScanJSON's input -- mirrors `ubx scan`'s own
 // single-resource flags (UBI-25, docs/architecture.md -- MCP server).
-// Deliberately excludes --all (bulk onboarding), --surface-as (opens a
-// real GitHub issue/PR -- a side effect, not read-only detection) --
-// "boundary by omission."
+// Deliberately excludes --all (bulk onboarding) -- "boundary by
+// omission."
 type scanJSONOptions struct {
 	Config          *Config
 	Stack           string

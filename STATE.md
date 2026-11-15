@@ -7,6 +7,25 @@
 
 ## In flight
 
+**2026-11-15: `ubx server`, `vcs/` and the pull-request acceptance methods
+removed (UBI-300).**
+- **Gone:** `server/`, `vcs/`, the Dockerfile, `accept --from-merge`,
+  `why --verify-acceptance`, `verify`'s re-derivation flags,
+  `scan --surface-as`, the VCS config keys, and `AcceptFromMerge`/
+  `AcceptFromReview` in `core`.
+- **History still reads:** `pr_merge` and `pr_review` records keep every
+  field (`Acceptance` keeps them, read-only). `ubx verify` reports them as
+  from a removed method. `why`, `history`, `blame` and `stats` mark them.
+  Pinned by `cli/ledger_removed_methods_test.go` against a hand-written
+  ledger.
+- **Fixed on the way:** `ubx stats` never listed `loopback` or `pr_review`
+  acceptances.
+- **Read before rebuilding a hosted watcher:** `server/drift.go`,
+  `allowlist.go` and `stackdiscovery.go` last exist at `cadaf6d`.
+- **Left in place:** `ubx propose`'s only real use was the PR trailer. It
+  still computes the hash, and whether it stays is a separate CLI-surface
+  decision.
+
 **2026-11-15: writeback, `.ubx.hcl` and the state projections removed
 (UBI-301).**
 - **Gone:** the `writeback`, `hclstack`, `diagram` and `mdrender` packages;

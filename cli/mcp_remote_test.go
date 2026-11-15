@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -36,17 +37,13 @@ func TestMCP_Why_RemoteStore_ProposalID_WithStack_ReadsFromStore(t *testing.T) {
 	rootDir := remoteConfigDir(t, storeName)
 
 	// Accept a real proposal directly against the shared bucket first --
-	// ubx_why's own job is reading it back, not creating it.
-	repoDir, sha := gitRepoWithProposal(t, "proposal.json", draftProposalJSON)
-	apiBase := fakeGitHubServer(t, "ubx-proposal: 3ac4ad60be63780420495d6f6dc16e06c206ad5960fa0a664facce27e73ec6ae", []map[string]any{})
-	t.Setenv("UBX_GITHUB_API_BASE_URL", apiBase)
-	if _, err := runUbx(t, nil, "accept",
-		"--from-merge", sha,
-		"--repo-dir", repoDir,
-		"--proposal-file", "proposal.json",
-		"--github-repo", "acme/infra",
-		"--ledger-dir", ".",
-	); err != nil {
+	// ubx_why's own job is reading it back, not creating it. A local
+	// accept: this used to seed through `accept --from-merge`, removed in
+	// UBI-300, and the proposal's ID does not depend on how it was
+	// accepted.
+	proposalPath := filepath.Join(t.TempDir(), "proposal.json")
+	writeFile(t, proposalPath, draftProposalJSON)
+	if _, err := runUbx(t, nil, "accept", proposalPath, "--ledger-dir", "."); err != nil {
 		t.Fatalf("seed accept: %v", err)
 	}
 	_ = bucket

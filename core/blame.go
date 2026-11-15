@@ -26,7 +26,9 @@ type BlameEntry struct {
 	// AcceptanceMethod/Approvers describe who signed the proposal that
 	// set this attribute -- "local" carries no signer identity (nothing
 	// in this project's own design records "who ran ubx accept," a real,
-	// named limit, not an oversight); "pr_merge" carries real approvers.
+	// named limit, not an oversight); "loopback" carries presence only;
+	// a historical "pr_merge" (a removed method, UBI-300) carries real
+	// approvers.
 	AcceptanceMethod string
 	Approvers        []string
 

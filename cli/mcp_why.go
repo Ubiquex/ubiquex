@@ -2,9 +2,7 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 
 	"github.com/ubiquex/ubiquex/core"
 )
@@ -18,14 +16,8 @@ import (
 // fix; a stale version of this comment claimed the two were still one
 // shared implementation, which stopped being true the moment that
 // happened and was never corrected until now. err is non-nil only for a
-// genuine failure (bad argument, unreadable ledger, no proposals found, or
-// a verify-acceptance TOOL failure -- git/GitHub unreachable) -- never for
-// an actionable FINDING (a verify-acceptance mismatch is fully described
-// in the returned payload's VerifyAcceptance field, matching how a CLI
-// --json caller already sees it: the JSON always carries the finding,
-// exit code 1 is a CLI/shell convention this function has no equivalent
-// concept of).
-func computeWhyJSON(ctx context.Context, cfg *Config, ledgerDir, stack, arg string, verifyAcceptance bool, repoDir, githubRepo string) (*whyJSON, error) {
+// genuine failure (bad argument, unreadable ledger, no proposals found).
+func computeWhyJSON(ctx context.Context, cfg *Config, ledgerDir, stack, arg string) (*whyJSON, error) {
 	if proposalIDPattern.MatchString(arg) {
 		// A bare proposal ID carries no stack of its own (docs/architecture.md
 		// -- Addressing) -- the caller-supplied stack is what a remote store
@@ -41,20 +33,7 @@ func computeWhyJSON(ctx context.Context, cfg *Config, ledgerDir, stack, arg stri
 		if err != nil {
 			return nil, err
 		}
-		payload := &whyJSON{Format: jsonFormatVersion, Proposal: p}
-		if !verifyAcceptance {
-			return payload, nil
-		}
-		verifyResult, verifyErr := runVerifyAcceptance(ctx, io.Discard, p, repoDir, githubRepo, true)
-		payload.VerifyAcceptance = verifyResult
-		var exitErr *ExitCodeError
-		if errors.As(verifyErr, &exitErr) && exitErr.Code == 2 {
-			// A genuine tool failure (git/GitHub unreachable, malformed
-			// --github-repo) -- not a finding the payload already
-			// describes.
-			return payload, exitErr.Err
-		}
-		return payload, nil
+		return &whyJSON{Format: jsonFormatVersion, Proposal: p}, nil
 	}
 
 	addr, ok := core.ParseAddress(arg)

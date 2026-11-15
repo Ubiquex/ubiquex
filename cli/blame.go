@@ -210,13 +210,11 @@ func renderBlameHuman(out io.Writer, st *styler, result *core.BlameResult, showA
 		case "":
 			// no acceptance recorded -- shouldn't happen for anything
 			// reachable via ProposalsForAddress, but never crash over it.
-		case "pr_merge":
-			who = st.Approver(strings.Join(g.Approvers, ", ")) + st.Dim(" via pr_merge")
 		default:
 			if len(g.Approvers) > 0 {
-				who = st.Approver(strings.Join(g.Approvers, ", ")) + st.Dim(" via "+g.AcceptanceMethod)
+				who = st.Approver(strings.Join(g.Approvers, ", ")) + st.Dim(" via "+methodLabel(g.AcceptanceMethod))
 			} else {
-				who = st.Dim("via " + g.AcceptanceMethod)
+				who = st.Dim("via " + methodLabel(g.AcceptanceMethod))
 			}
 		}
 		fmt.Fprintln(out, readGroup(st,

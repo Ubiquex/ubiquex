@@ -407,7 +407,11 @@ func TestBlame_DestroyedAddress_BlamesFinalPreDestroyState(t *testing.T) {
 	}
 }
 
-func TestBlame_PrMergeApprovers(t *testing.T) {
+// TestBlame_HistoricalPrMergeApprovers: pr_merge was removed in UBI-300,
+// but a ledger that recorded one is history, and blame still attributes it
+// to the approvers it names. The record is appended as such a ledger
+// already holds it, since nothing can produce one any more.
+func TestBlame_HistoricalPrMergeApprovers(t *testing.T) {
 	l, _, res := driftToStaging(t)
 	addr := testAddr()
 
@@ -419,14 +423,20 @@ func TestBlame_PrMergeApprovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Hash: %v", err)
 	}
-	accepted, err := AcceptFromMerge(l, drift, hash, MergeAcceptance{
-		MergeSHA:  "8c1d2e3f",
-		PRNumber:  7,
-		Approvers: []string{"roozbeh", "alice"},
-	})
-	if err != nil {
-		t.Fatalf("AcceptFromMerge: %v", err)
+	drift.ID = hash
+	drift.Status = StatusAccepted
+	drift.Acceptance = &Acceptance{
+		Method:     "pr_merge",
+		Platform:   "github",
+		MergeSHA:   "8c1d2e3f",
+		PRNumber:   7,
+		Approvers:  []string{"roozbeh", "alice"},
+		AcceptedAt: "2026-09-01T10:00:00Z",
 	}
+	if err := l.Append(drift); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	accepted := drift
 
 	result, err := Blame(l, addr)
 	if err != nil {

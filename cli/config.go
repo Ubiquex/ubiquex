@@ -57,20 +57,15 @@ type Config struct {
 	// and this table wins on a name collision (blueprint's own
 	// mergeDeclaredBlueprints, which reports the supersession rather
 	// than applying it quietly).
-	Blueprints             map[string]string         `toml:"blueprints" json:"blueprints"`
-	DynamicProviders       map[string]map[string]any `toml:"dynamic_providers" json:"dynamic_providers"`
-	DynamicProviderGroups  map[string]map[string]any `toml:"dynamic_provider_groups" json:"dynamic_provider_groups"`
-	Stack                  string                    `toml:"stack" json:"stack"`
-	GithubRepo             string                    `toml:"github_repo" json:"github_repo"`
-	GitlabProject          string                    `toml:"gitlab_project" json:"gitlab_project"`
-	AzureDevOpsProject     string                    `toml:"azure_devops_project" json:"azure_devops_project"`
-	BitbucketServerURL     string                    `toml:"bitbucket_server_url" json:"bitbucket_server_url"`
-	BitbucketServerProject string                    `toml:"bitbucket_server_project" json:"bitbucket_server_project"`
-	KnownDependents        []string                  `toml:"known_dependents" json:"known_dependents"`
-	K8sAudit               K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
-	Ledger                 LedgerConfig              `toml:"ledger" json:"ledger"`
-	Intent                 IntentConfig              `toml:"intent" json:"intent"`
-	Root                   bool                      `toml:"root" json:"root"`
+	Blueprints            map[string]string         `toml:"blueprints" json:"blueprints"`
+	DynamicProviders      map[string]map[string]any `toml:"dynamic_providers" json:"dynamic_providers"`
+	DynamicProviderGroups map[string]map[string]any `toml:"dynamic_provider_groups" json:"dynamic_provider_groups"`
+	Stack                 string                    `toml:"stack" json:"stack"`
+	KnownDependents       []string                  `toml:"known_dependents" json:"known_dependents"`
+	K8sAudit              K8sAuditConfig            `toml:"k8s_audit" json:"k8s_audit"`
+	Ledger                LedgerConfig              `toml:"ledger" json:"ledger"`
+	Intent                IntentConfig              `toml:"intent" json:"intent"`
+	Root                  bool                      `toml:"root" json:"root"`
 }
 
 // IntentConfig is .ubx/config's [intent] table -- UBI-224 removed every
@@ -411,47 +406,6 @@ func declaredProviderTables(cfg *Config) string {
 		return tables[0]
 	default:
 		return strings.Join(tables, " and ")
-	}
-}
-
-// applyGithubRepoDefault fills githubRepo from cfg if --github-repo
-// wasn't explicitly given.
-func applyGithubRepoDefault(cmd *cobra.Command, githubRepo *string, cfg *Config) {
-	if !cmd.Flags().Changed("github-repo") && cfg.GithubRepo != "" {
-		*githubRepo = cfg.GithubRepo
-	}
-}
-
-// applyGitlabProjectDefault fills gitlabProject from cfg if
-// --gitlab-project wasn't explicitly given -- the GitLab analog of
-// applyGithubRepoDefault (UBI-160 Phase 1).
-func applyGitlabProjectDefault(cmd *cobra.Command, gitlabProject *string, cfg *Config) {
-	if !cmd.Flags().Changed("gitlab-project") && cfg.GitlabProject != "" {
-		*gitlabProject = cfg.GitlabProject
-	}
-}
-
-// applyAzureDevOpsProjectDefault fills azureDevOpsProject from cfg if
-// --azure-devops-project wasn't explicitly given -- the Azure DevOps
-// analog of applyGithubRepoDefault/applyGitlabProjectDefault (UBI-160
-// Phase 2).
-func applyAzureDevOpsProjectDefault(cmd *cobra.Command, azureDevOpsProject *string, cfg *Config) {
-	if !cmd.Flags().Changed("azure-devops-project") && cfg.AzureDevOpsProject != "" {
-		*azureDevOpsProject = cfg.AzureDevOpsProject
-	}
-}
-
-// applyBitbucketServerDefaults fills bitbucketServerURL/
-// bitbucketServerProject from cfg if their own flags weren't explicitly
-// given -- the Bitbucket Server analog of applyGithubRepoDefault and
-// friends (UBI-160 Phase 3), covering both of its own two real flags at
-// once since they're always used together.
-func applyBitbucketServerDefaults(cmd *cobra.Command, bitbucketServerURL, bitbucketServerProject *string, cfg *Config) {
-	if !cmd.Flags().Changed("bitbucket-server-url") && cfg.BitbucketServerURL != "" {
-		*bitbucketServerURL = cfg.BitbucketServerURL
-	}
-	if !cmd.Flags().Changed("bitbucket-server-project") && cfg.BitbucketServerProject != "" {
-		*bitbucketServerProject = cfg.BitbucketServerProject
 	}
 }
 

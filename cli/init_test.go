@@ -114,7 +114,6 @@ func TestInit_WritesRealValues_ForGivenFlags(t *testing.T) {
 		"--provider-version", "6.54.0",
 		"--provider-config", `{"timeout":"30s"}`,
 		"--region", "us-east-1",
-		"--github-repo", "acme/infra",
 	)
 	if err != nil {
 		t.Fatalf("ubx init: %v\noutput: %s", err, out)
@@ -140,9 +139,6 @@ func TestInit_WritesRealValues_ForGivenFlags(t *testing.T) {
 	}
 	if pc["region"] != "us-east-1" {
 		t.Errorf("ProviderConfigs[hashicorp/aws][region] = %v, want us-east-1 (--region shorthand merged with --provider-config)", pc["region"])
-	}
-	if cfg.GithubRepo != "acme/infra" {
-		t.Errorf("GithubRepo = %q, want acme/infra", cfg.GithubRepo)
 	}
 
 	if !strings.Contains(out, "write stack.ts") || strings.Contains(out, "add a provider above") {
@@ -361,7 +357,7 @@ func TestInit_Full_PreservesTheAnnotatedEncyclopedia(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(b)
-	for _, want := range []string{"k8s_audit", "ledger", "# provider = {", "# thirdparty_providers = {", "github_repo"} {
+	for _, want := range []string{"k8s_audit", "ledger", "# provider = {", "# thirdparty_providers = {"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected --full to include %q, got:\n%s", want, content)
 		}

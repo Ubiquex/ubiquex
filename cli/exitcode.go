@@ -5,8 +5,7 @@ package cli
 // codes, docs/exit-codes.mdx) applies to every verb, not just `ubx status`
 // where it started (UBI-17): 0 success/clean (nothing to flag), 1 an
 // actionable finding (drift found, a stale/parent-mismatched proposal, a
-// rejected pr_merge acceptance claim, declined write-back/revert-plan
-// attributes), 2 an error (bad input, I/O, provider failure, ledger
+// failed acceptance re-check), 2 an error (bad input, I/O, provider failure, ledger
 // failure). Any plain (non-ExitCodeError) error returned from a command's
 // RunE falls through to exit 2 in cmd/ubx/main.go -- a command that hasn't
 // been audited into this contract yet still exits non-zero, just at the

@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -82,31 +81,6 @@ func TestScan_JSON_Unchanged(t *testing.T) {
 	}
 	if len(payload.Proposals) != 0 {
 		t.Errorf("expected no proposals for an unchanged scan, got: %+v", payload.Proposals)
-	}
-}
-
-// TestScan_JSON_RejectsWithAllAndSurfaceAs: --json is deliberately scoped
-// to single-resource scan without --surface-as (UBI-20 workstream 2's own
-// documented limit, not an oversight) -- both combinations must fail
-// loudly, not silently ignore --json.
-func TestScan_JSON_RejectsWithAllAndSurfaceAs(t *testing.T) {
-	statePath := writeState(t, `{"mode": "managed", "type": "fake_widget", "name": "api", "instances": [{"attributes": {"id": "api"}}]}`)
-	_, err := runUbx(t, nil, "scan", "--all", "--tfstate", statePath, "--json", "--ledger-dir", t.TempDir())
-	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "--json") {
-		t.Fatalf("expected a clear --json+--all error, got: %v", err)
-	}
-
-	_, err = runUbx(t, nil, "scan",
-		"--provider", fakeProviderBinary,
-		"--stack", "payments", "--type", "fake_widget", "--name", "widget-json-surface",
-		"--lookup", `{"name":"widget-json-surface"}`,
-		"--ledger-dir", t.TempDir(),
-		"--json", "--surface-as", "issue", "--github-repo", "acme/infra",
-	)
-	requireExitCode(t, err, 2, "")
-	if !strings.Contains(err.Error(), "--json") {
-		t.Fatalf("expected a clear --json+--surface-as error, got: %v", err)
 	}
 }
 
@@ -245,46 +219,5 @@ func TestWhy_JSON_Chain(t *testing.T) {
 	}
 	if payload.Chain[0].ID != driftID || payload.Chain[1].ID != adoptID {
 		t.Fatalf("expected newest-first ordering [drift, adopt], got [%s, %s]", payload.Chain[0].ID, payload.Chain[1].ID)
-	}
-}
-
-// TestWhy_JSON_VerifyAcceptance_Mismatch: --json --verify-acceptance
-// embeds the same reviewer-mismatch finding the human view reports as
-// MISMATCH, and the command still exits 1 for it in JSON mode.
-func TestWhy_JSON_VerifyAcceptance_Mismatch(t *testing.T) {
-	ledgerDir, id, repoDir := acceptFromMergeForVerifyTest(t, []map[string]any{
-		{"user": map[string]any{"login": "roozbeh"}, "state": "APPROVED", "submitted_at": "2026-07-11T10:00:00Z"},
-	})
-
-	apiBaseNow := fakeGitHubServer(t, "irrelevant -- verify never re-reads the PR body", []map[string]any{
-		{"user": map[string]any{"login": "roozbeh"}, "state": "CHANGES_REQUESTED", "submitted_at": "2026-07-11T11:00:00Z"},
-	})
-	t.Setenv("UBX_GITHUB_API_BASE_URL", apiBaseNow)
-
-	out, err := runUbx(t, nil, "why", id,
-		"--ledger-dir", ledgerDir, "--verify-acceptance",
-		"--repo-dir", repoDir, "--github-repo", "acme/infra", "--json",
-	)
-	requireExitCode(t, err, 1, out)
-
-	var payload whyJSON
-	if jsonErr := json.Unmarshal([]byte(out), &payload); jsonErr != nil {
-		t.Fatalf("stdout must be exactly one JSON document, got: %v for: %s", jsonErr, out)
-	}
-	va := payload.VerifyAcceptance
-	if va == nil || !va.Applicable {
-		t.Fatalf("expected an applicable verify_acceptance result, got: %+v", va)
-	}
-	if !va.GitOK {
-		t.Errorf("git_ok = false, want true (only reviewers changed)")
-	}
-	if va.ReviewersMatch {
-		t.Error("reviewers_match = true, want false (a MISMATCH)")
-	}
-	if len(va.CurrentApprovers) != 0 {
-		t.Errorf("expected zero current approvers (the approval was withdrawn), got: %v", va.CurrentApprovers)
-	}
-	if len(va.RecordedApprovers) != 1 || va.RecordedApprovers[0] != "roozbeh" {
-		t.Errorf("expected recorded approvers = [roozbeh], got: %v", va.RecordedApprovers)
 	}
 }

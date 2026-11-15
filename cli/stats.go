@@ -102,9 +102,17 @@ func renderStatsHuman(out io.Writer, r *core.StatsResult) {
 	fmt.Fprintln(out)
 
 	fmt.Fprintln(out, "Acceptance method:")
-	for _, method := range []string{"local", "pr_merge"} {
+	// Every method the ledger actually holds, sorted, rather than a fixed
+	// list: the fixed list named local and pr_merge only, so loopback
+	// (UBI-294) and pr_review acceptances never appeared here at all.
+	methods := make([]string, 0, len(r.AcceptanceMethod))
+	for method := range r.AcceptanceMethod {
+		methods = append(methods, method)
+	}
+	sort.Strings(methods)
+	for _, method := range methods {
 		if n := r.AcceptanceMethod[method]; n > 0 {
-			fmt.Fprintf(out, "  %s: %d (%.0f%%)\n", method, n, pctOf(n, r.TotalProposals))
+			fmt.Fprintf(out, "  %s: %d (%.0f%%)\n", methodLabel(method), n, pctOf(n, r.TotalProposals))
 		}
 	}
 	fmt.Fprintln(out)
