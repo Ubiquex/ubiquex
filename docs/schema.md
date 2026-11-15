@@ -2861,3 +2861,67 @@ renderer reads a proposal and returns bytes.
 
 Recording the hash of the render on an acceptance, storing the bytes, and
 the acceptance method that uses them. That is UBI-294.
+
+### Amendment: rendered_hash and loopback acceptance (2026-11-15, UBI-294)
+
+**New, optional, additive field**: `Acceptance.rendered_hash`, a new
+`Acceptance.method` value, `loopback`, and a place in the ledger store to
+keep what the renderer (amendment above) produced.
+
+With an agent as a proposal's author, the proposal hash proves the
+applied change matches the accepted one. It does not prove what the
+human who accepted it was looking at, and the agent writes
+`intent.summary` itself. `rendered_hash` records that: the SHA-256 of the
+exact bytes shown to the approver.
+
+#### Storage: content-addressed, beside proposals
+
+`core.LedgerStore` gains `ReadRendered` and `WriteRenderedIfAbsent`. The
+git-directory store keeps renders at `ledger/rendered/<hash>.render`; the
+blob store at `rendered/<hash>.render`. Writes are create-only, and the
+git store writes via temp file plus hard link, so a crash never leaves a
+partial render under a real name. Nothing deletes them:
+`ledgerstore.OrphanedProposals` only ever lists `proposals/`.
+
+Rejected: inside the proposal JSON (every chain walk would pay for it);
+re-render on demand (relies on the renderer never changing, which is exactly what
+would make a stored hash unverifiable); beside `.ubx/plans/` (pruned
+working state).
+
+#### Write order, enforced rather than described
+
+`Ledger.StageRender` renders, hashes, stores if absent, reads back, and
+returns the **stored** bytes for display. `AcceptFromLoopback` then
+refuses unless the bytes are stored and verify against `rendered_hash`
+(`ErrRenderNotStored`, `ErrRenderedHashMismatch`), **and** the proposal
+being accepted re-renders to those same bytes (`ErrRenderMismatch`). A
+crash between the two leaves an orphan render, never an acceptance
+pointing at nothing. An approval given while looking at one proposal
+cannot be attached to another.
+
+#### `loopback`, and what `approvers` says
+
+A loopback acceptance's `approvers` is always exactly
+`["loopback:presence"]`. The channel attests that someone at the machine
+clicked, and nothing about who, so it records no OS username. `local`
+is unchanged: it still records the OS user, since a human typing `ubx
+accept` in their own shell is at least weak evidence, and records
+already written keep their meaning.
+
+`rendered_hash` is plain SHA-256 of the bytes, not domain-prefixed like
+proposal hashes. Renders live in their own namespace, and a plain hash
+lets anyone holding the bytes check a record with `sha256sum` alone.
+
+#### No `schema_version` bump, and no forward-compatibility hazard
+
+`Acceptance` is excluded from hashed content (§Canonical hashing), so the
+new field cannot move any proposal's hash, and an absent field reads as
+before (tested against a hand-written pre-change entry). Unlike
+`Modification.sources` (UBI-285), a binary predating this field that
+drops it on read still verifies the chain, because nothing it drops is
+hashed.
+
+#### Not in this amendment
+
+`ubx verify` re-checking a `loopback` acceptance is UBI-298. Nothing calls
+`AcceptFromLoopback` yet; the loopback page that will is UBI-295.

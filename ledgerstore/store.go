@@ -30,6 +30,7 @@ import (
 //
 //	proposals/<id>.prop.json
 //	applies/<id>.attempt-<n>.apply.json
+//	rendered/<rendered-hash>.render -- what an approver saw (UBX-230)
 //	heads/genesis            -- the first proposal's own ID
 //	heads/<parent-id>        -- the proposal that comes right after parent-id
 //	head-hint                -- best-effort cache, never load-bearing
@@ -38,6 +39,7 @@ import (
 const (
 	proposalsPrefix = "proposals/"
 	appliesPrefix   = "applies/"
+	renderedPrefix  = "rendered/"
 	headsPrefix     = "heads/"
 	genesisEdgeName = "genesis"
 	headHintKey     = "head-hint"
@@ -46,6 +48,8 @@ const (
 )
 
 func proposalKey(id string) string { return proposalsPrefix + id + ".prop.json" }
+
+func renderedKey(hash string) string { return renderedPrefix + hash + ".render" }
 
 func applyKey(proposalID string, attempt int64) string {
 	return fmt.Sprintf("%s%s.attempt-%d.apply.json", appliesPrefix, proposalID, attempt)
@@ -112,6 +116,22 @@ func (s *Store) ReadProposal(ctx context.Context, id string) ([]byte, error) {
 
 func (s *Store) WriteProposalIfAbsent(ctx context.Context, id string, data []byte) error {
 	err := s.bucket.WriteAll(ctx, proposalKey(id), data, &blob.WriterOptions{IfNotExist: true})
+	if gcerrors.Code(err) == gcerrors.FailedPrecondition {
+		return core.ErrStoreObjectExists
+	}
+	return err
+}
+
+func (s *Store) ReadRendered(ctx context.Context, hash string) ([]byte, error) {
+	b, err := s.bucket.ReadAll(ctx, renderedKey(hash))
+	if gcerrors.Code(err) == gcerrors.NotFound {
+		return nil, core.ErrStoreObjectNotFound
+	}
+	return b, err
+}
+
+func (s *Store) WriteRenderedIfAbsent(ctx context.Context, hash string, data []byte) error {
+	err := s.bucket.WriteAll(ctx, renderedKey(hash), data, &blob.WriterOptions{IfNotExist: true})
 	if gcerrors.Code(err) == gcerrors.FailedPrecondition {
 		return core.ErrStoreObjectExists
 	}

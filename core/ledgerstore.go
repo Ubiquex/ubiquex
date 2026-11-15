@@ -49,6 +49,23 @@ type LedgerStore interface {
 	// via a racy stat-then-write.
 	WriteProposalIfAbsent(ctx context.Context, id string, data []byte) error
 
+	// ReadRendered reads the bytes stored under hash by
+	// WriteRenderedIfAbsent: what was rendered to a human approving a
+	// proposal (UBX-230, Acceptance.RenderedHash).
+	// ErrStoreObjectNotFound if nothing is stored under hash. Callers
+	// verify the bytes against hash (core.Ledger.ReadRendered); a store
+	// only moves bytes, the same split as every other method here.
+	ReadRendered(ctx context.Context, hash string) ([]byte, error)
+
+	// WriteRenderedIfAbsent stores rendered bytes under their own hash,
+	// create-only -- ErrStoreObjectExists if something is already there.
+	// Content-addressed, so two proposals rendering identically share one
+	// object, and a second write of the same render is a no-op by
+	// construction rather than an overwrite. Rendered bytes are evidence:
+	// nothing in this package ever deletes them, and ledgerstore's own
+	// orphan collection only ever considers proposals/.
+	WriteRenderedIfAbsent(ctx context.Context, hash string, data []byte) error
+
 	// Head returns the current ledger head hash, or "" for a genesis
 	// (never-appended-to) ledger.
 	Head(ctx context.Context) (string, error)
