@@ -2824,7 +2824,7 @@ that produced it. Recovering an argument from the ledger is unavailable
 in either language, which is a separate finding and not one more
 declaration field can address.
 
-### Amendment: a renderer for a pending proposal (2026-11-15, UBX-232)
+### Amendment: a renderer for a pending proposal (2026-11-15, UBI-296)
 
 **New code, no schema change.** When an agent authors a proposal, the
 proposal hash proves the applied change matches the accepted one, but not
@@ -2860,4 +2860,4 @@ renderer reads a proposal and returns bytes.
 #### Not in this amendment
 
 Recording the hash of the render on an acceptance, storing the bytes, and
-the acceptance method that uses them. That is UBX-230.
+the acceptance method that uses them. That is UBI-294.

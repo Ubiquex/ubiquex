@@ -7,21 +7,21 @@
 
 ## In flight
 
-**2026-11-15: a renderer for a pending proposal (UBX-232).**
+**2026-11-15: a renderer for a pending proposal (UBI-296).**
 `core.RenderProposal` renders a pending proposal's hashed content
 deterministically, for a human deciding whether to accept it. Golden file
 at `core/testdata/render/proposal.golden`; regenerate with
 `UBX_UPDATE_GOLDEN=1` and bump `RendererVersion` in the same change.
 Recorded in `docs/schema.md`'s "Amendment: a renderer for a pending
-proposal". Next, in order: UBX-230 (`Acceptance.RenderedHash`, a
-`loopback` method, stored renders), then UBX-234 (`ubx verify` re-checks a
+proposal". Next, in order: UBI-294 (`Acceptance.RenderedHash`, a
+`loopback` method, stored renders), then UBI-298 (`ubx verify` re-checks a
 `loopback` acceptance).
 
 **Flagged, not fixed: this file was last rewritten 2026-09-13.** 68 PRs
 merged between then and #219, and the rest of this file was not re-walked
 on 2026-11-15. Treat everything below as possibly stale until a session
 rewrites it under rule 3. That rewrite is deliberately not part of the
-UBX-232/230/234 PRs.
+UBI-296/230/234 PRs.
 
 **ubx v0.6.0 is released (2026-09-13).** Two things that were quietly
 untrue are now true: a blueprint's content hash reaches the ledger on

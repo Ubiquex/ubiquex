@@ -22,8 +22,8 @@ import (
 const RendererVersion = "ubx-render proposal/v1"
 
 // RenderProposal renders a proposal for a human deciding whether to accept
-// it (UBX-232). Once an acceptance records the hash of these bytes
-// (UBX-230), the renderer is part of the trust chain, so the output is a
+// it (UBI-296). Once an acceptance records the hash of these bytes
+// (UBI-294), the renderer is part of the trust chain, so the output is a
 // pure function of the proposal's hashed content:
 //
 //   - It renders exactly what Hash covers (canonicalProposalBytes: the
