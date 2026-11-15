@@ -26,8 +26,15 @@ verify, and are a render of the proposal being accepted. Recorded in
 `docs/schema.md`'s "Amendment: rendered_hash and loopback acceptance".
 `ubiquex-internals` page edits are on that repo's own PR; its
 `sync-state.json` stamp waits for this to merge. Nothing calls
-`AcceptFromLoopback` yet: the loopback page is UBI-295. Next: UBI-298
-(`ubx verify` re-checks a `loopback` acceptance).
+`AcceptFromLoopback` yet: the loopback page is UBI-295.
+
+**2026-11-15: `ubx verify` re-checks a loopback acceptance (UBI-298).**
+`core.VerifyLoopbackAcceptance` reads the stored render, checks its hash,
+re-renders, and compares. Six distinct outcomes, named in `--json` as
+`outcome`. A missing render fails rather than passing; a render from a
+different `RendererVersion` is inconclusive. `local` and `pr_merge`
+checks are unchanged. User docs: `ubx-docs-users`
+`cli-reference/verify.mdx`, on its own PR.
 
 **Flagged, not fixed: this file was last rewritten 2026-09-13.** 68 PRs
 merged between then and #219, and the rest of this file was not re-walked

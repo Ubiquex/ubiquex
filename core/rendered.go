@@ -1,9 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrRenderedHashMismatch means bytes stored as a render do not hash to
@@ -74,4 +76,100 @@ func (l *Ledger) ReadRendered(hash string) ([]byte, error) {
 		return nil, fmt.Errorf("read rendered %s: %w (hashes to %s)", hash, ErrRenderedHashMismatch, got)
 	}
 	return b, nil
+}
+
+// Outcomes of VerifyLoopbackAcceptance. Each one names a different
+// answer, and "could not check" is never folded into "checked and wrong".
+const (
+	// LoopbackVerified: the stored bytes hash to RenderedHash, and the
+	// proposal re-renders to exactly those bytes.
+	LoopbackVerified = "verified"
+	// LoopbackNoRenderedHash: a loopback acceptance that names no render.
+	// Every loopback acceptance AcceptFromLoopback writes carries one, so
+	// this record did not come from it.
+	LoopbackNoRenderedHash = "no_rendered_hash"
+	// LoopbackRenderedMissing: the store holds nothing under RenderedHash.
+	// The record claims the approver saw something that can no longer be
+	// produced. A failure, not an inconclusive check: the evidence the
+	// record rests on is gone.
+	LoopbackRenderedMissing = "rendered_missing"
+	// LoopbackRenderedHashMismatch: the stored bytes do not hash to
+	// RenderedHash. They were altered or corrupted after storing.
+	LoopbackRenderedHashMismatch = "rendered_hash_mismatch"
+	// LoopbackRerenderDiffers: the stored bytes verify, the renderer is the
+	// same version that produced them, and the proposal renders to
+	// something else.
+	LoopbackRerenderDiffers = "rerender_differs"
+	// LoopbackRendererChanged: the stored bytes verify against their hash,
+	// but a different renderer version produced them, so this binary cannot
+	// reproduce them. What the approver saw is still on record and intact;
+	// only the re-render step cannot be done. Inconclusive.
+	LoopbackRendererChanged = "renderer_version_changed"
+)
+
+// LoopbackCheck is VerifyLoopbackAcceptance's result. Outcome is one of the
+// Loopback* constants; Detail is a sentence for a human.
+type LoopbackCheck struct {
+	Outcome string
+	Detail  string
+}
+
+// Failed reports whether the check found a problem, as opposed to passing
+// or being unable to finish.
+func (c LoopbackCheck) Failed() bool {
+	return c.Outcome != LoopbackVerified && c.Outcome != LoopbackRendererChanged
+}
+
+// Inconclusive reports whether the check could not finish.
+func (c LoopbackCheck) Inconclusive() bool { return c.Outcome == LoopbackRendererChanged }
+
+// VerifyLoopbackAcceptance re-checks a loopback acceptance from the ledger
+// alone (UBX-234): read the stored render by RenderedHash, confirm the
+// bytes hash to it, re-render p, and confirm the result is byte-identical.
+//
+// What a pass proves: the bytes on record are the bytes the approval was
+// bound to, and they are a faithful render of this exact proposal. What it
+// does not prove: who approved. A loopback acceptance attests that someone
+// at the machine clicked, and its approver is "loopback:presence" for that
+// reason.
+//
+// err is only for a store that could not be read at all. Every finding
+// about the record comes back as an Outcome.
+func VerifyLoopbackAcceptance(l *Ledger, p *Proposal) (LoopbackCheck, error) {
+	if p.Acceptance == nil || p.Acceptance.RenderedHash == "" {
+		return LoopbackCheck{LoopbackNoRenderedHash,
+			"this loopback acceptance records no rendered_hash, so there is nothing to show what the approver saw"}, nil
+	}
+	want := p.Acceptance.RenderedHash
+	if !IsHash(want) {
+		return LoopbackCheck{LoopbackRenderedHashMismatch,
+			fmt.Sprintf("rendered_hash %q is not a 64-character hex hash", want)}, nil
+	}
+	stored, err := l.store.ReadRendered(context.Background(), want)
+	if errors.Is(err, ErrStoreObjectNotFound) {
+		return LoopbackCheck{LoopbackRenderedMissing,
+			"the ledger store holds no render under rendered_hash " + want + "; what the approver saw cannot be shown"}, nil
+	}
+	if err != nil {
+		return LoopbackCheck{}, fmt.Errorf("read rendered %s: %w", want, err)
+	}
+	if got := HashRendered(stored); got != want {
+		return LoopbackCheck{LoopbackRenderedHashMismatch,
+			"the stored render hashes to " + got + ", not to its rendered_hash " + want + "; it was altered after storing"}, nil
+	}
+	again, err := RenderProposal(p)
+	if err != nil {
+		return LoopbackCheck{LoopbackRerenderDiffers, "the proposal cannot be re-rendered: " + err.Error()}, nil
+	}
+	if bytes.Equal(again, stored) {
+		return LoopbackCheck{LoopbackVerified,
+			"the stored render is intact and is exactly what this proposal renders to; it attests presence at the machine, not identity"}, nil
+	}
+	storedVersion, _, _ := strings.Cut(string(stored), "\n")
+	if storedVersion != RendererVersion {
+		return LoopbackCheck{LoopbackRendererChanged,
+			fmt.Sprintf("the stored render is intact, but %q produced it and this binary renders %q, so it cannot be reproduced here", storedVersion, RendererVersion)}, nil
+	}
+	return LoopbackCheck{LoopbackRerenderDiffers,
+		"the stored render is intact but this proposal renders to different bytes with the same renderer version"}, nil
 }
