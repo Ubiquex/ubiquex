@@ -84,9 +84,9 @@ region = "us-west-2"
 
 func TestCascadeAdversarial_Row3_CrossFormatCascadeChain(t *testing.T) {
 	root := t.TempDir()
-	rootFile := writeCascadeFile(t, root, "config.toml", `github_repo = "acme/infra"`)
+	rootFile := writeCascadeFile(t, root, "config.toml", "[k8s_audit]\ncluster = \"acme/infra\"\n")
 	mid := filepath.Join(root, "mid")
-	midFile := writeCascadeFile(t, mid, "config.hcl", `gitlab_project = "./terraform"`)
+	midFile := writeCascadeFile(t, mid, "config.hcl", `k8s_audit = { region = "./terraform" }`)
 	leaf := filepath.Join(mid, "leaf")
 	leafFile := writeCascadeFile(t, leaf, "config.yaml", `stack: "payments"`)
 
@@ -95,14 +95,14 @@ func TestCascadeAdversarial_Row3_CrossFormatCascadeChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigResolved: %v", err)
 	}
-	if rc.Config.GithubRepo != "acme/infra" || rc.Config.GitlabProject != "./terraform" || rc.Config.Stack != "payments" {
+	if rc.Config.K8sAudit.Cluster != "acme/infra" || rc.Config.K8sAudit.Region != "./terraform" || rc.Config.Stack != "payments" {
 		t.Fatalf("got %+v, want all three keys present from their own format", rc.Config)
 	}
-	if rc.Provenance["github_repo"] != rootFile {
-		t.Errorf("provenance[github_repo] = %q, want %q", rc.Provenance["github_repo"], rootFile)
+	if rc.Provenance["k8s_audit.cluster"] != rootFile {
+		t.Errorf("provenance[k8s_audit.cluster] = %q, want %q", rc.Provenance["k8s_audit.cluster"], rootFile)
 	}
-	if rc.Provenance["gitlab_project"] != midFile {
-		t.Errorf("provenance[gitlab_project] = %q, want %q", rc.Provenance["gitlab_project"], midFile)
+	if rc.Provenance["k8s_audit.region"] != midFile {
+		t.Errorf("provenance[k8s_audit.region] = %q, want %q", rc.Provenance["k8s_audit.region"], midFile)
 	}
 	if rc.Provenance["stack"] != leafFile {
 		t.Errorf("provenance[stack] = %q, want %q", rc.Provenance["stack"], leafFile)
@@ -163,15 +163,15 @@ func TestCascadeAdversarial_Row5_YAMLQuotedNumericAllowed(t *testing.T) {
 
 func TestCascadeAdversarial_Row6_YAMLAmbiguousBooleanTokensStayStrings(t *testing.T) {
 	dir := t.TempDir()
-	writeCascadeFile(t, dir, "config.yaml", "github_repo: no\n")
+	writeCascadeFile(t, dir, "config.yaml", "k8s_audit:\n  cluster: no\n")
 	withConfigSearchDir(t, dir)
 
 	rc, err := LoadConfigResolved(&bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("LoadConfigResolved: %v (gopkg.in/yaml.v3 must resolve a bare 'no' as !!str, not !!bool)", err)
 	}
-	if rc.Config.GithubRepo != "no" {
-		t.Fatalf("GithubRepo = %q, want the literal string \"no\"", rc.Config.GithubRepo)
+	if rc.Config.K8sAudit.Cluster != "no" {
+		t.Fatalf("K8sAudit.Cluster = %q, want the literal string \"no\"", rc.Config.K8sAudit.Cluster)
 	}
 }
 
@@ -179,7 +179,7 @@ func TestCascadeAdversarial_Row6_YAMLAmbiguousBooleanTokensStayStrings(t *testin
 
 func TestCascadeAdversarial_Row7_HCLInterpolationRejected_WholeFileFails(t *testing.T) {
 	dir := t.TempDir()
-	writeCascadeFile(t, dir, "config.hcl", "stack = \"${path.module}\"\ngithub_repo = \"acme/infra\"\n")
+	writeCascadeFile(t, dir, "config.hcl", "stack = \"${path.module}\"\nk8s_audit = { cluster = \"acme/infra\" }\n")
 	withConfigSearchDir(t, dir)
 
 	_, err := LoadConfigResolved(&bytes.Buffer{})
@@ -193,7 +193,7 @@ func TestCascadeAdversarial_Row7_HCLInterpolationRejected_WholeFileFails(t *test
 
 func TestCascadeAdversarial_Row7_HCLFunctionCallRejected(t *testing.T) {
 	dir := t.TempDir()
-	writeCascadeFile(t, dir, "config.hcl", `gitlab_project = upper("./terraform")`)
+	writeCascadeFile(t, dir, "config.hcl", `k8s_audit = { region = upper("./terraform") }`)
 	withConfigSearchDir(t, dir)
 
 	_, err := LoadConfigResolved(&bytes.Buffer{})
@@ -208,14 +208,14 @@ func TestCascadeAdversarial_Row7_ViolationNeverPartiallyMerges(t *testing.T) {
 	// must contribute nothing -- not even its own otherwise-fine keys --
 	// matching the existing malformed-TOML precedent.
 	root := t.TempDir()
-	writeCascadeFile(t, root, "config", `github_repo = "acme/infra"`)
+	writeCascadeFile(t, root, "config", "[k8s_audit]\ncluster = \"acme/infra\"\n")
 	child := filepath.Join(root, "child")
-	writeCascadeFile(t, child, "config.hcl", "stack = \"${path.module}\"\ngitlab_project = \"./terraform\"\n")
+	writeCascadeFile(t, child, "config.hcl", "stack = \"${path.module}\"\nk8s_audit = { region = \"./terraform\" }\n")
 
 	withConfigSearchDir(t, child)
 	_, err := LoadConfigResolved(&bytes.Buffer{})
 	if err == nil {
-		t.Fatal("expected the whole cascade load to fail -- a partial salvage of gitlab_project would be silently wrong")
+		t.Fatal("expected the whole cascade load to fail -- a partial salvage of k8s_audit.region would be silently wrong")
 	}
 }
 
@@ -224,11 +224,12 @@ func TestCascadeAdversarial_Row7_ViolationNeverPartiallyMerges(t *testing.T) {
 func TestCascadeAdversarial_Row8_PerDirectoryStackDefault_RestInherited(t *testing.T) {
 	root := t.TempDir()
 	writeCascadeFile(t, root, "config", `
-gitlab_project = "./terraform"
-
 [provider]
 source = "hashicorp/aws"
 version = "6.60.0"
+
+[k8s_audit]
+region = "./terraform"
 `)
 	stackDir := filepath.Join(root, "payments")
 	writeCascadeFile(t, stackDir, "config", `stack = "payments"`)
@@ -241,8 +242,8 @@ version = "6.60.0"
 	if rc.Config.Stack != "payments" {
 		t.Errorf("Stack = %q, want payments", rc.Config.Stack)
 	}
-	if rc.Config.GitlabProject != "./terraform" {
-		t.Errorf("GitlabProject = %q, want ./terraform (inherited from root)", rc.Config.GitlabProject)
+	if rc.Config.K8sAudit.Region != "./terraform" {
+		t.Errorf("K8sAudit.Region = %q, want ./terraform (inherited from root)", rc.Config.K8sAudit.Region)
 	}
 	if rc.Config.Provider.Source != "hashicorp/aws" || rc.Config.Provider.Version != "6.60.0" {
 		t.Errorf("Provider = %+v, want the root's own source/version", rc.Config.Provider)
@@ -253,9 +254,9 @@ version = "6.60.0"
 
 func TestCascadeAdversarial_Row9_ProvenanceIsFormatBlind(t *testing.T) {
 	root := t.TempDir()
-	rootFile := writeCascadeFile(t, root, "config.toml", `github_repo = "acme/infra"`)
+	rootFile := writeCascadeFile(t, root, "config.toml", "[k8s_audit]\ncluster = \"acme/infra\"\n")
 	mid := filepath.Join(root, "mid")
-	midFile := writeCascadeFile(t, mid, "config.hcl", `gitlab_project = "./terraform"`)
+	midFile := writeCascadeFile(t, mid, "config.hcl", `k8s_audit = { region = "./terraform" }`)
 	leaf := filepath.Join(mid, "leaf")
 	leafFile := writeCascadeFile(t, leaf, "config.yaml", `stack: "payments"`)
 

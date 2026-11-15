@@ -74,7 +74,6 @@ func newInitCmd() *cobra.Command {
 		providerPath    string
 		providerConfig  string
 		region          string
-		githubRepo      string
 		resetLedger     bool
 	)
 
@@ -86,7 +85,7 @@ and Config formats). Default output is minimal and runnable: stack (from --stack
 and, if given, a provider -- written into the modern [thirdparty_providers]/[provider_configs] map, the same shape a
 multi-provider stack uses (never the legacy singular [provider]/[provider_config] table, which --provider's own
 local-binary-path escape hatch still writes for local/dev use -- see --provider below). Everything else
-(github_repo, k8s_audit, ledger, intent) is left out of the default output entirely rather than shown
+(k8s_audit, ledger, intent) is left out of the default output entirely rather than shown
 commented -- see the full key reference at https://docs.ubiquex.io/cli-reference/config, or pass --full to
 get the old exhaustive, annotated file inline instead.
 
@@ -263,7 +262,6 @@ Refuses to overwrite an existing config unless --force is given.`,
 				ProviderVersion: providerVersion,
 				ProviderPath:    providerPath,
 				ProviderConfig:  providerConfigMap,
-				GithubRepo:      githubRepo,
 			}
 			content := render(values)
 
@@ -306,7 +304,6 @@ Refuses to overwrite an existing config unless --force is given.`,
 	cmd.Flags().StringVar(&providerPath, "provider", "", "default provider binary path -- a local/dev escape hatch, written into the legacy singular [provider] table (mutually exclusive with --source; there is no local-path slot in the modern map)")
 	cmd.Flags().StringVar(&providerConfig, "provider-config", "", `default provider config, e.g. {"region":"us-east-1"} -- merged with --region if both are given`)
 	cmd.Flags().StringVar(&region, "region", "", "shorthand for --provider-config's most common key -- equivalent to --provider-config '{\"region\":\"<region>\"}'")
-	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "default GitHub repository, e.g. acme/infra")
 	cmd.Flags().BoolVar(&resetLedger, "reset-ledger", false, "sanctioned fresh start for a broken git-directory ledger: clears the head pointer (.ubx/ledger.lock) and any stale plan drafts (.ubx/plans/), preserves the redaction salt untouched, never deletes ledger/proposals or ledger/applies. Ignores every other flag above. Refuses on a ledger whose head still resolves to a real proposal unless --force is also given (that head is healthy, not broken -- resetting it would orphan real history)")
 
 	return cmd
@@ -479,7 +476,6 @@ type configTemplateValues struct {
 	ProviderVersion string
 	ProviderPath    string
 	ProviderConfig  map[string]any
-	GithubRepo      string
 }
 
 // hasProvider reports whether v carries a real provider, either shape --
@@ -526,8 +522,7 @@ func nextStepComment(hasProvider, isDynamic bool, shortName string) string {
 // renderConfigTemplateHCL builds the default, minimal .ubx/config.hcl:
 // a real stack, a real provider if one was given (modern [thirdparty_providers]
 // map, or the legacy singular [provider] table for --provider's own
-// local-path escape hatch -- never both), real github_repo if
-// given, and a closing next-step pointer. Nothing else -- every other
+// local-path escape hatch -- never both), and a closing next-step pointer. Nothing else -- every other
 // key (k8s_audit, ledger, intent) is left for cli/config.mdx or --full,
 // not shown commented here at all.
 func renderConfigTemplateHCL(v configTemplateValues) string {
@@ -572,14 +567,7 @@ func renderConfigTemplateHCL(v configTemplateValues) string {
 		b.WriteString("# provider_configs = {\n#   \"hashicorp/aws\" = {\n#     region = \"us-east-1\"\n#   }\n# }\n\n")
 	}
 
-	if v.GithubRepo != "" {
-		fmt.Fprintf(&b, "github_repo = %s\n", literalValue(v.GithubRepo))
-	}
-	if v.GithubRepo != "" {
-		b.WriteString("\n")
-	}
-
-	b.WriteString("# Full key reference (github_repo, k8s_audit, ledger, intent, the\n")
+	b.WriteString("# Full key reference (k8s_audit, ledger, intent, the\n")
 	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
 	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
 
@@ -601,12 +589,6 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 
 	if v.Stack != "" {
 		fmt.Fprintf(&b, "stack = %q\n\n", v.Stack)
-	}
-	if v.GithubRepo != "" {
-		fmt.Fprintf(&b, "github_repo = %q\n", v.GithubRepo)
-	}
-	if v.GithubRepo != "" {
-		b.WriteString("\n")
 	}
 
 	switch {
@@ -638,7 +620,7 @@ func renderConfigTemplateTOML(v configTemplateValues) string {
 		b.WriteString("# [provider_configs.\"hashicorp/aws\"]\n# region = \"us-east-1\"\n\n")
 	}
 
-	b.WriteString("# Full key reference (github_repo, k8s_audit, ledger, intent, the\n")
+	b.WriteString("# Full key reference (k8s_audit, ledger, intent, the\n")
 	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
 	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
 
@@ -660,12 +642,6 @@ func renderConfigTemplateYAML(v configTemplateValues) string {
 	if v.Stack != "" {
 		fmt.Fprintf(&b, "stack: %s\n\n", literalValue(v.Stack))
 	}
-	if v.GithubRepo != "" {
-		fmt.Fprintf(&b, "github_repo: %s\n", literalValue(v.GithubRepo))
-	}
-	if v.GithubRepo != "" {
-		b.WriteString("\n")
-	}
 
 	switch {
 	case v.ProviderPath != "":
@@ -684,7 +660,7 @@ func renderConfigTemplateYAML(v configTemplateValues) string {
 		b.WriteString("# provider_configs:\n#   \"hashicorp/aws\":\n#     region: \"us-east-1\"\n\n")
 	}
 
-	b.WriteString("# Full key reference (github_repo, k8s_audit, ledger, intent, the\n")
+	b.WriteString("# Full key reference (k8s_audit, ledger, intent, the\n")
 	b.WriteString("# legacy single-provider shape, ...): " + docsConfigRef + "\n")
 	b.WriteString("# -- or `ubx init --full` for the same reference written inline.\n\n")
 
@@ -714,14 +690,6 @@ func renderConfigTemplateFullTOML(v configTemplateValues) string {
 		fmt.Fprintf(&b, "stack = %q\n", v.Stack)
 	} else {
 		b.WriteString("# stack = \"payments\"\n")
-	}
-	b.WriteString("\n")
-
-	b.WriteString("# Default GitHub repository for --from-merge / --verify-acceptance / --surface-as.\n")
-	if v.GithubRepo != "" {
-		fmt.Fprintf(&b, "github_repo = %q\n", v.GithubRepo)
-	} else {
-		b.WriteString("# github_repo = \"acme/infra\"\n")
 	}
 	b.WriteString("\n")
 
@@ -800,14 +768,6 @@ func renderConfigTemplateFullHCL(v configTemplateValues) string {
 	}
 	b.WriteString("\n")
 
-	b.WriteString("# Default GitHub repository for --from-merge / --verify-acceptance / --surface-as.\n")
-	if v.GithubRepo != "" {
-		fmt.Fprintf(&b, "github_repo = %s\n", literalValue(v.GithubRepo))
-	} else {
-		b.WriteString("# github_repo = \"acme/infra\"\n")
-	}
-	b.WriteString("\n")
-
 	b.WriteString("# Provider identity, legacy single-provider shape -- a local/dev escape hatch\n")
 	b.WriteString("# only; new stacks should prefer `thirdparty_providers` below instead.\n")
 	switch {
@@ -870,14 +830,6 @@ func renderConfigTemplateFullYAML(v configTemplateValues) string {
 		fmt.Fprintf(&b, "stack: %s\n", literalValue(v.Stack))
 	} else {
 		b.WriteString("# stack: \"payments\"\n")
-	}
-	b.WriteString("\n")
-
-	b.WriteString("# Default GitHub repository for --from-merge / --verify-acceptance / --surface-as.\n")
-	if v.GithubRepo != "" {
-		fmt.Fprintf(&b, "github_repo: %s\n", literalValue(v.GithubRepo))
-	} else {
-		b.WriteString("# github_repo: \"acme/infra\"\n")
 	}
 	b.WriteString("\n")
 

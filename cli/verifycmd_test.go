@@ -3,40 +3,10 @@ package cli
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// addCommitToExistingRepo adds a second real commit to an already-existing
-// git repo dir (built by gitRepoWithProposal), writing content to path,
-// and returns the new commit's own SHA.
-func addCommitToExistingRepo(t *testing.T, repoDir, path, content string) string {
-	t.Helper()
-	run := func(args ...string) {
-		t.Helper()
-		out, err := exec.Command("git", append([]string{"-C", repoDir}, args...)...).CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	full := filepath.Join(repoDir, path)
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("add", path)
-	run("commit", "-q", "-m", "a second, different change")
-
-	out, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").Output()
-	if err != nil {
-		t.Fatalf("git rev-parse HEAD: %v", err)
-	}
-	return strings.TrimSpace(string(out))
-}
 
 func TestVerify_EmptyLedger(t *testing.T) {
 	ledgerDir := t.TempDir()
@@ -143,99 +113,5 @@ func TestVerify_JSON_Shape(t *testing.T) {
 	}
 	if payload.Acceptance.Convenience != 1 {
 		t.Fatalf("expected 1 convenience-tier acceptance, got: %+v", payload.Acceptance)
-	}
-}
-
-func TestVerify_PrMerge_RepoDirAndGithubRepoGiven_Derived(t *testing.T) {
-	ledgerDir, id, repoDir := acceptFromMergeForVerifyTest(t, []map[string]any{
-		{"user": map[string]any{"login": "roozbeh"}, "state": "APPROVED", "submitted_at": "2026-07-11T10:00:00Z"},
-	})
-	_ = id
-
-	out, err := runUbx(t, nil, "verify", "--ledger-dir", ledgerDir, "--repo-dir", repoDir, "--github-repo", "acme/infra")
-	if err != nil {
-		t.Fatalf("ubx verify: %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "1 re-derived") {
-		t.Fatalf("expected 1 re-derived acceptance, got: %s", out)
-	}
-	if !strings.Contains(out, "0 inconclusive") {
-		t.Fatalf("expected 0 inconclusive, got: %s", out)
-	}
-}
-
-func TestVerify_PrMerge_NoRepoDir_Inconclusive(t *testing.T) {
-	ledgerDir, _, _ := acceptFromMergeForVerifyTest(t, []map[string]any{
-		{"user": map[string]any{"login": "roozbeh"}, "state": "APPROVED", "submitted_at": "2026-07-11T10:00:00Z"},
-	})
-
-	out, err := runUbx(t, nil, "verify", "--ledger-dir", ledgerDir)
-	if err != nil {
-		t.Fatalf("ubx verify: %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "0 re-derived") || !strings.Contains(out, "1 inconclusive") {
-		t.Fatalf("expected 0 re-derived, 1 inconclusive (no --repo-dir given), got: %s", out)
-	}
-}
-
-func TestVerify_PrMerge_RepoDirOnly_ReviewerCheckInconclusive(t *testing.T) {
-	ledgerDir, _, repoDir := acceptFromMergeForVerifyTest(t, []map[string]any{
-		{"user": map[string]any{"login": "roozbeh"}, "state": "APPROVED", "submitted_at": "2026-07-11T10:00:00Z"},
-	})
-
-	out, err := runUbx(t, nil, "verify", "--ledger-dir", ledgerDir, "--repo-dir", repoDir)
-	if err != nil {
-		t.Fatalf("ubx verify: %v\noutput: %s", err, out)
-	}
-	if !strings.Contains(out, "0 re-derived") || !strings.Contains(out, "1 inconclusive") {
-		t.Fatalf("expected git-only check to count as inconclusive (no --github-repo), got: %s", out)
-	}
-}
-
-// row: forged acceptance (hash mismatch) -- the ledger's own acceptance
-// record points its merge_sha at a real commit whose own proposal file
-// content doesn't match what was actually accepted (simulating a tampered
-// acceptance record, not a rewritten git history -- git commits are
-// content-addressed and immutable, so "the file at that exact commit now
-// hashes differently" can only mean the RECORD points somewhere it
-// shouldn't).
-func TestVerify_PrMerge_ForgedAcceptance_ExitsOne(t *testing.T) {
-	ledgerDir, id, repoDir := acceptFromMergeForVerifyTest(t, []map[string]any{
-		{"user": map[string]any{"login": "roozbeh"}, "state": "APPROVED", "submitted_at": "2026-07-11T10:00:00Z"},
-	})
-
-	// A second, real commit in the same repo with different proposal
-	// content -- a real, existing commit, just not the one that was
-	// actually accepted.
-	forgedSHA := addCommitToExistingRepo(t, repoDir, "proposals/pending.json", `{
-		"schema_version": 1, "stack": "payments", "parent": "", "kind": "change",
-		"intent": {"summary": "a completely different change"}, "delta": {},
-		"resolution": {"resolved_at": "2026-07-11T00:00:00Z"},
-		"cost_delta": {}, "blast_radius": {"creates": 0, "modifies": 0, "destroys": 0},
-		"status": "draft"
-	}`)
-
-	propPath := filepath.Join(ledgerDir, "ledger", "proposals", id+".prop.json")
-	raw, err := os.ReadFile(propPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var onDisk map[string]interface{}
-	if err := json.Unmarshal(raw, &onDisk); err != nil {
-		t.Fatal(err)
-	}
-	onDisk["acceptance"].(map[string]interface{})["merge_sha"] = forgedSHA
-	forged, err := json.MarshalIndent(onDisk, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(propPath, forged, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := runUbx(t, nil, "verify", "--ledger-dir", ledgerDir, "--repo-dir", repoDir, "--github-repo", "acme/infra")
-	requireExitCode(t, err, 1, out)
-	if !strings.Contains(out, "FAILED") {
-		t.Fatalf("expected a FAILED acceptance line, got: %s", out)
 	}
 }

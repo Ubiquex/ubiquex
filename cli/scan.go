@@ -31,9 +31,6 @@ func newScanCmd() *cobra.Command {
 		out             string
 		timeout         time.Duration
 		noAttribution   bool
-		surfaceAs       string
-		githubRepo      string
-		surfaceTgt      surfaceTarget
 		propose         string
 		all             bool
 		tfstatePath     string
@@ -70,9 +67,6 @@ func newScanCmd() *cobra.Command {
 			if jsonOut && all {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --json is only supported for a single-resource scan, not --all")}
 			}
-			if jsonOut && surfaceAs != "" {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --json is not supported with --surface-as -- surfacing already reports its own separate result")}
-			}
 
 			cfg, err := LoadConfig(cmd.ErrOrStderr())
 			if err != nil {
@@ -83,12 +77,10 @@ func newScanCmd() *cobra.Command {
 			if err := applyProviderConfigDefault(cmd, &providerConfig, cfg); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: %w", err)}
 			}
-			applyGithubRepoDefault(cmd, &githubRepo, cfg)
 
 			if all {
-				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
-					cmd.Flags().Changed("surface-as") {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: --type/--name/--lookup/--surface-as describe a single resource " +
+				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --all: --type/--name/--lookup describe a single resource " +
 						"and aren't relevant to bulk onboarding")}
 				}
 				if tfstatePath == "" {
@@ -118,8 +110,8 @@ func newScanCmd() *cobra.Command {
 
 			if discover {
 				if cmd.Flags().Changed("type") || cmd.Flags().Changed("name") || cmd.Flags().Changed("lookup") ||
-					cmd.Flags().Changed("surface-as") || all || tfstatePath != "" {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: --type/--name/--lookup/--surface-as/--all/--tfstate describe a " +
+					all || tfstatePath != "" {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --discover: --type/--name/--lookup/--all/--tfstate describe a " +
 						"single resource or tfstate-sourced bulk onboarding and aren't relevant to cloud-side discovery (docs/discovery.md)")}
 				}
 				tags, err := parseTagFlags(tagFlags)
@@ -177,10 +169,6 @@ func newScanCmd() *cobra.Command {
 				if out != "" || outDir != "" {
 					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: --out/--out-dir are only supported for a single-resource scan (--type and --name) -- a fleet-wide walk always saves directly to the plan store", stack)}
 				}
-				if surfaceAs != "" && propose == "revert" {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --surface-as requires --propose adopt (default) or both -- " +
-						"its issue/PR receipt is built around a drift_adopt proposal, which --propose revert doesn't generate")}
-				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 				defer cancel()
 				ledger, closeLedger, err := openLedgerForStack(ctx, ledgerDir, stack, cfg)
@@ -192,31 +180,11 @@ func newScanCmd() *cobra.Command {
 					warnIfLegacyProviderFlagsGiven(cmd, cfg)
 				}
 				st := newStylerFull(cmd, fullHashes)
-				// UBI-165: a fleet-wide walk surfaces one issue/pull
-				// request per drifted resource. This used to be refused
-				// outright, which left `ubx server`'s own drift-watch
-				// loop with no working command to call at all.
-				var surface surfaceFunc
-				if surfaceAs != "" {
-					surfaceTgt.githubRepo = githubRepo
-					if _, err := surfaceTgt.selected(); err != nil {
-						return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: %w", stack, err)}
-					}
-					out2 := cmd.OutOrStdout()
-					surface = func(p *core.Proposal, addr core.Address) error {
-						return surfaceDrift(ctx, out2, p, addr, surfaceAs, surfaceTgt)
-					}
-				}
-				return runScanFleet(ctx, cmd.OutOrStdout(), st, ledger, ledgerDir, stack, propose, noAttribution, cfg, providerPath, source, providerVersion, providerConfig, surface)
+				return runScanFleet(ctx, cmd.OutOrStdout(), st, ledger, ledgerDir, stack, propose, noAttribution, cfg, providerPath, source, providerVersion, providerConfig)
 			}
 			if resourceType == "" || resourceName == "" {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: pass both --type and --name to scan one resource, or neither to scan every resource this stack's ledger already tracks", stack)}
 			}
-			if surfaceAs != "" && propose == "revert" {
-				return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan: --surface-as requires --propose adopt (default) or both -- " +
-					"its issue/PR receipt is built around a drift_adopt proposal, which --propose revert doesn't generate")}
-			}
-
 			addr := core.Address{Stack: stack, Type: resourceType, Name: resourceName}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
@@ -404,11 +372,10 @@ func newScanCmd() *cobra.Command {
 					"--propose both on a drifted resource generates two; omit --out to print both to stdout", addr)}
 			}
 
-			// CloudTrail attribution and --surface-as are both drift_adopt-
-			// specific (docs/schema.md: attribution sources attach to
-			// drift_adopt proposals only; --surface-as's receipt is built
-			// around one too, guarded above) -- apply them to whichever
-			// generated proposal is the drift_adopt, if any.
+			// CloudTrail attribution is drift_adopt-specific (docs/schema.md:
+			// attribution sources attach to drift_adopt proposals only) --
+			// apply it to whichever generated proposal is the drift_adopt,
+			// if any.
 			var adoptProposal *core.Proposal
 			for _, p := range proposals {
 				if p.Kind == core.KindDriftAdopt {
@@ -418,13 +385,6 @@ func newScanCmd() *cobra.Command {
 			if adoptProposal != nil && !noAttribution {
 				attributeDrift(ctx, ledger, addr, res, adoptProposal, json.RawMessage(providerConfig), source, cfg.K8sAudit)
 			}
-			if adoptProposal != nil && surfaceAs != "" {
-				surfaceTgt.githubRepo = githubRepo
-				if err := surfaceDrift(ctx, out2, adoptProposal, addr, surfaceAs, surfaceTgt); err != nil {
-					return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan %s: %w", addr, err)}
-				}
-			}
-
 			kindLabel := "new"
 			if res.Outcome == core.ScanDrifted {
 				kindLabel = "drifted"
@@ -515,22 +475,11 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&out, "out", "", "write the generated proposal here instead of stdout (single-resource mode only; use --out-dir with --all)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "overall timeout for the scan (or the whole --all walk)")
 	cmd.Flags().BoolVar(&noAttribution, "no-attribution", false, "skip audit-log attribution: drift attribution for drift proposals, or genesis attribution (who created it) for --discover's own adoption proposals")
-	cmd.Flags().StringVar(&surfaceAs, "surface-as", "", "on drift, open an \"issue\" or \"pr\" carrying a receipt instead of just printing the proposal (requires exactly one platform flag below)")
-	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository to surface drift in")
-	cmd.Flags().StringVar(&surfaceTgt.gitlabProject, "gitlab-project", "", "namespace/project of the GitLab project to surface drift in")
-	cmd.Flags().StringVar(&surfaceTgt.azureDevOpsProject, "azure-devops-project", "", "organization/project/repository of the Azure DevOps repo to surface drift in")
-	cmd.Flags().StringVar(&surfaceTgt.azureDevOpsWorkItemType, "azure-devops-work-item-type", "", "Azure DevOps work item type for --surface-as issue (default \"Issue\", which exists in the Agile and Basic processes; Scrum needs \"Product Backlog Item\", CMMI needs \"Requirement\")")
-	cmd.Flags().StringVar(&surfaceTgt.bitbucketServerURL, "bitbucket-server-url", "", "base URL of the self-hosted Bitbucket Server instance (required with --bitbucket-server-project; no default host exists)")
-	cmd.Flags().StringVar(&surfaceTgt.bitbucketServerProject, "bitbucket-server-project", "", "PROJECTKEY/repository-slug of the Bitbucket Server repo to surface drift in (--surface-as pr only: Bitbucket Server has no issue tracker)")
-	cmd.Flags().StringVar(&surfaceTgt.bitbucketCloudRepo, "bitbucket-cloud-repo", "", "workspace/repo-slug of the Bitbucket Cloud repository to surface drift in")
-	cmd.Flags().StringVar(&surfaceTgt.githubAPIBaseURL, "github-api-base-url", "", "a GitHub Enterprise Server instance URL, e.g. https://github.example.com (default the real api.github.com)")
-	cmd.Flags().StringVar(&surfaceTgt.gitlabAPIBaseURL, "gitlab-api-base-url", "", "a self-managed GitLab instance URL, e.g. https://gitlab.example.com (default the real gitlab.com)")
-	cmd.Flags().StringVar(&surfaceTgt.azureDevOpsAPIBaseURL, "azure-devops-api-base-url", "", "an on-prem Azure DevOps Server collection URL (default the real Azure DevOps Services)")
 	cmd.Flags().StringVar(&propose, "propose", "adopt", "on drift, which resolution(s) to generate: \"adopt\" (drift_adopt), \"revert\" (drift_revert), or \"both\" (no effect on a new/never-seen resource, which always generates adoption)")
 	cmd.Flags().BoolVar(&all, "all", false, "bulk onboarding: enumerate every resource in --tfstate and generate an adoption proposal for each, instead of scanning a single --type/--name resource")
 	cmd.Flags().StringVar(&tfstatePath, "tfstate", "", "path to a Terraform state v4 JSON file, read once as a bulk-onboarding enumeration source (required with --all)")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "write each --all-generated proposal to its own file in this directory, instead of printing all of them to stdout")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (single-resource scan only, not --all or --surface-as)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text (single-resource scan only, not --all)")
 	cmd.Flags().BoolVar(&discover, "discover", false, "cloud-side discovery: enumerate resources via the AWS Resource Groups Tagging API instead of a tfstate file, generating an adoption proposal for each -- requires --tag")
 	cmd.Flags().StringArrayVar(&tagFlags, "tag", nil, "key=value tag filter for --discover (repeatable; multiple --tag with the same key OR-combine, different keys AND-combine)")
 	cmd.Flags().StringArrayVar(&discoverTypes, "discover-type", nil, "Terraform resource type allowlist for --discover (repeatable, e.g. aws_sqs_queue) -- narrows client-side; omit to classify every tag-matched resource")

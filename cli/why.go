@@ -27,25 +27,22 @@ var proposalIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func newWhyCmd() *cobra.Command {
 	var (
-		ledgerDir        string
-		stack            string
-		verifyAcceptance bool
-		repoDir          string
-		githubRepo       string
-		jsonOut          bool
-		dialogue         bool
-		fullHashes       bool
+		ledgerDir  string
+		stack      string
+		jsonOut    bool
+		dialogue   bool
+		fullHashes bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "why <proposal-id-or-alias> | <stack>.<type>.<name>",
 		Short: "Explain an accepted proposal, or a resource's full proposal history",
 		Args:  cobra.ExactArgs(1),
-		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0
-		// (nothing to re-verify, or it checks out), 1 (--verify-acceptance
-		// found the claimed acceptance doesn't check out -- an actionable
-		// finding), 2 (error). SilenceUsage/Errors: same reasoning as
-		// status.go.
+		// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): 0 or
+		// 2 (error). Exit 1 belonged to --verify-acceptance, which
+		// re-derived a pr_merge acceptance and went with that method
+		// (UBI-300); `ubx verify` re-checks every acceptance that can still
+		// be re-checked. SilenceUsage/Errors: same reasoning as status.go.
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -53,7 +50,6 @@ func newWhyCmd() *cobra.Command {
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("why: %w", err)}
 			}
-			applyGithubRepoDefault(cmd, &githubRepo, cfg)
 			applyStackDefault(cmd, &stack, cfg)
 
 			out := cmd.OutOrStdout()
@@ -131,22 +127,12 @@ func newWhyCmd() *cobra.Command {
 						renderDialogue(out, p, dlg)
 					}
 				}
-				if !verifyAcceptance {
-					if jsonOut {
-						if err := writeJSON(out, whyJSON{Format: jsonFormatVersion, Proposal: p, Applies: attempts, Dialogue: dlg}); err != nil {
-							return &ExitCodeError{Code: 2, Err: err}
-						}
-					}
-					return nil
-				}
-				verifyResult, verifyErr := runVerifyAcceptance(cmd.Context(), out, p, repoDir, githubRepo, jsonOut)
 				if jsonOut {
-					payload := whyJSON{Format: jsonFormatVersion, Proposal: p, Applies: attempts, VerifyAcceptance: verifyResult, Dialogue: dlg}
-					if err := writeJSON(out, payload); err != nil {
+					if err := writeJSON(out, whyJSON{Format: jsonFormatVersion, Proposal: p, Applies: attempts, Dialogue: dlg}); err != nil {
 						return &ExitCodeError{Code: 2, Err: err}
 					}
 				}
-				return verifyErr
+				return nil
 			}
 
 			addr, ok := core.ParseAddress(whyArg)
@@ -196,9 +182,6 @@ func newWhyCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().StringVar(&stack, "stack", "", "which stack's ledger to open, for a bare proposal-id argument -- required only when .ubx/config's [ledger] store is a remote store (a resource-address argument already names its own stack); unused for the default git store")
-	cmd.Flags().BoolVar(&verifyAcceptance, "verify-acceptance", false, "re-derive a pr_merge proposal's acceptance against git history + the GitHub API and report whether it still checks out")
-	cmd.Flags().StringVar(&repoDir, "repo-dir", ".", "local git working tree to verify --verify-acceptance's merge commit against")
-	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository, for --verify-acceptance's reviewer re-check (git-history re-check runs without it)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text; the chain view emits a JSON array under \"chain\"")
 	cmd.Flags().BoolVar(&dialogue, "dialogue", false, "if this proposal's intent.sources names a captured dialogue (ubx chat), read and render the actual conversation behind it -- change proposal -> the draft it came from -> the real conversation")
 	cmd.Flags().BoolVar(&fullHashes, "full-hashes", false, "render every hash in full instead of the default 12-char short form")
@@ -211,12 +194,11 @@ func newWhyCmd() *cobra.Command {
 // forms are genuinely different views, not one view with an optional
 // extra field.
 type whyJSON struct {
-	Format           int                   `json:"format"`
-	Proposal         *core.Proposal        `json:"proposal,omitempty"`
-	Chain            []*core.Proposal      `json:"chain,omitempty"`
-	Applies          []*core.ApplyRecord   `json:"applies,omitempty"`
-	VerifyAcceptance *verifyAcceptanceJSON `json:"verify_acceptance,omitempty"`
-	Dialogue         *resolver.Dialogue    `json:"dialogue,omitempty"`
+	Format   int                 `json:"format"`
+	Proposal *core.Proposal      `json:"proposal,omitempty"`
+	Chain    []*core.Proposal    `json:"chain,omitempty"`
+	Applies  []*core.ApplyRecord `json:"applies,omitempty"`
+	Dialogue *resolver.Dialogue  `json:"dialogue,omitempty"`
 }
 
 // renderProposal is the full single-proposal view, unchanged from before
@@ -235,7 +217,7 @@ func renderProposal(out io.Writer, st *styler, p *core.Proposal) {
 	facts := []string{deltaCounts(st, p.BlastRadius.Creates, p.BlastRadius.Modifies, p.BlastRadius.Destroys)}
 	if p.Acceptance != nil {
 		facts = append(facts,
-			st.Approver(strings.Join(p.Acceptance.Approvers, ", "))+st.Dim(" via "+p.Acceptance.Method),
+			st.Approver(strings.Join(p.Acceptance.Approvers, ", "))+st.Dim(" via "+methodLabel(p.Acceptance.Method)),
 			st.Dim(relativeTime(p.Acceptance.AcceptedAt, now)))
 	} else {
 		facts = append(facts, st.Dim("not yet accepted"))
@@ -574,7 +556,7 @@ func renderProposalCompact(out io.Writer, st *styler, ledger *core.Ledger, p *co
 	// resource would show WHICH blueprint but never WHO signed off on
 	// actually calling it.
 	if p.Acceptance != nil {
-		fmt.Fprintf(out, "    accepted by %v via %s at %s\n", p.Acceptance.Approvers, p.Acceptance.Method, p.Acceptance.AcceptedAt)
+		fmt.Fprintf(out, "    accepted by %v via %s at %s\n", p.Acceptance.Approvers, methodLabel(p.Acceptance.Method), p.Acceptance.AcceptedAt)
 	}
 	renderCreates(out, st, p.Delta.Creates, "    ")
 	renderModifies(out, st, p.Delta.Modifies, "    ")

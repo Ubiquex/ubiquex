@@ -651,9 +651,19 @@ type InvariantCheck struct {
 // nobody verified it. "local" keeps recording the OS user unchanged: a
 // human typed `ubx accept` in their own shell there, which is at least
 // weak evidence, and records already written keep their meaning.
+//
+// pr_merge and pr_review were removed on 2026-11-15 (UBI-300), with the
+// pull-request workflow that produced them: nothing writes either any
+// more. Platform, MergeSHA, PRNumber, ProposalFile and ReviewComment were
+// written only by those two, and stay, read-only: a ledger holding such a
+// record is history, and dropping the fields would make every one of them
+// silently lose its merge commit and approvers on read. Removing a field
+// costs nothing in hashing (Acceptance is outside hashed content) but
+// everything in what the record can still say. RemovedAcceptanceMethod
+// names them for readers.
 type Acceptance struct {
-	Method        string   `json:"method"`             // pr_merge | pr_review | local | loopback ("crypto" was reserved here and never implemented)
-	Platform      string   `json:"platform,omitempty"` // github | gitlab | azure-devops -- only for method "pr_merge"/"pr_review"
+	Method        string   `json:"method"`             // local | loopback; pr_merge | pr_review are removed methods, read only as history ("crypto" was reserved here and never implemented)
+	Platform      string   `json:"platform,omitempty"` // github | gitlab | azure-devops -- only for the removed "pr_merge"/"pr_review"
 	MergeSHA      string   `json:"merge_sha,omitempty"`
 	PRNumber      int64    `json:"pr_number,omitempty"`
 	ProposalFile  string   `json:"proposal_file,omitempty"`

@@ -93,7 +93,7 @@ func renderHistoryHuman(out io.Writer, st *styler, stack string, chain []*core.P
 		when := relativeTime(p.Resolution.ResolvedAt, now)
 		if p.Acceptance != nil {
 			who = st.Approver(strings.Join(p.Acceptance.Approvers, ", ")) +
-				st.Dim(" via "+p.Acceptance.Method)
+				st.Dim(" via "+methodLabel(p.Acceptance.Method))
 			when = relativeTime(p.Acceptance.AcceptedAt, now)
 		}
 		fmt.Fprintln(out)

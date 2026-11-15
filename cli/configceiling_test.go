@@ -29,12 +29,14 @@ func mkGitBoundary(t *testing.T, dir string) {
 
 func TestCascadeCeiling_Row12_RootTrueStopsCollectionMidTree(t *testing.T) {
 	grandparent := t.TempDir()
-	writeCascadeFile(t, grandparent, "config", `github_repo = "acme/infra"`)
+	writeCascadeFile(t, grandparent, "config", "[k8s_audit]\ncluster = \"acme/infra\"\n")
 
 	parent := filepath.Join(grandparent, "parent")
 	writeCascadeFile(t, parent, "config", `
 root = true
-gitlab_project = "./terraform"
+
+[k8s_audit]
+region = "./terraform"
 `)
 
 	child := filepath.Join(parent, "child")
@@ -48,11 +50,11 @@ gitlab_project = "./terraform"
 	if rc.Config.Stack != "payments" {
 		t.Errorf("Stack = %q, want payments", rc.Config.Stack)
 	}
-	if rc.Config.GitlabProject != "./terraform" {
-		t.Errorf("GitlabProject = %q, want ./terraform (the root=true file's own other keys still apply)", rc.Config.GitlabProject)
+	if rc.Config.K8sAudit.Region != "./terraform" {
+		t.Errorf("K8sAudit.Region = %q, want ./terraform (the root=true file's own other keys still apply)", rc.Config.K8sAudit.Region)
 	}
-	if rc.Config.GithubRepo != "" {
-		t.Errorf("GithubRepo = %q, want empty -- the grandparent, beyond the root=true ceiling, must never be read", rc.Config.GithubRepo)
+	if rc.Config.K8sAudit.Cluster != "" {
+		t.Errorf("K8sAudit.Cluster = %q, want empty -- the grandparent, beyond the root=true ceiling, must never be read", rc.Config.K8sAudit.Cluster)
 	}
 	if rc.CeilingReason != ceilingRootMarker {
 		t.Errorf("CeilingReason = %q, want %q", rc.CeilingReason, ceilingRootMarker)
@@ -88,7 +90,7 @@ func TestCascadeCeiling_Row13_RootNotABoolean_HardError(t *testing.T) {
 
 func TestCascadeCeiling_Row14_RepoBoundaryStopsCollection(t *testing.T) {
 	outside := t.TempDir()
-	writeCascadeFile(t, outside, "config", `github_repo = "should-never-be-read"`)
+	writeCascadeFile(t, outside, "config", "[k8s_audit]\ncluster = \"should-never-be-read\"\n")
 
 	repoRoot := filepath.Join(outside, "repo")
 	mkGitBoundary(t, repoRoot)
@@ -102,8 +104,8 @@ func TestCascadeCeiling_Row14_RepoBoundaryStopsCollection(t *testing.T) {
 	if rc.Config.Stack != "payments" {
 		t.Errorf("Stack = %q, want payments (the repo-root's own config is still included)", rc.Config.Stack)
 	}
-	if rc.Config.GithubRepo != "" {
-		t.Errorf("GithubRepo = %q, want empty -- outside the repo boundary, must never be read", rc.Config.GithubRepo)
+	if rc.Config.K8sAudit.Cluster != "" {
+		t.Errorf("K8sAudit.Cluster = %q, want empty -- outside the repo boundary, must never be read", rc.Config.K8sAudit.Cluster)
 	}
 	if rc.CeilingReason != ceilingRepoBoundary {
 		t.Errorf("CeilingReason = %q, want %q", rc.CeilingReason, ceilingRepoBoundary)
@@ -117,7 +119,7 @@ func TestCascadeCeiling_Row14_RepoBoundaryStopsCollection(t *testing.T) {
 
 func TestCascadeCeiling_Row15_HomeIsCeilingOutsideAnyRepo(t *testing.T) {
 	beyondHome := t.TempDir()
-	writeCascadeFile(t, beyondHome, "config", `github_repo = "should-never-be-read"`)
+	writeCascadeFile(t, beyondHome, "config", "[k8s_audit]\ncluster = \"should-never-be-read\"\n")
 
 	home := filepath.Join(beyondHome, "home")
 	writeCascadeFile(t, home, "config", `stack = "home-fallback"`)
@@ -131,8 +133,8 @@ func TestCascadeCeiling_Row15_HomeIsCeilingOutsideAnyRepo(t *testing.T) {
 	if rc.Config.Stack != "home-fallback" {
 		t.Errorf("Stack = %q, want home-fallback ($HOME's own config is still included)", rc.Config.Stack)
 	}
-	if rc.Config.GithubRepo != "" {
-		t.Errorf("GithubRepo = %q, want empty -- beyond $HOME, must never be read", rc.Config.GithubRepo)
+	if rc.Config.K8sAudit.Cluster != "" {
+		t.Errorf("K8sAudit.Cluster = %q, want empty -- beyond $HOME, must never be read", rc.Config.K8sAudit.Cluster)
 	}
 	if rc.CeilingReason != ceilingHome {
 		t.Errorf("CeilingReason = %q, want %q", rc.CeilingReason, ceilingHome)
@@ -309,7 +311,7 @@ func TestCascadeCeiling_Row20_ProvenanceRendersFilesystemRootCeiling(t *testing.
 
 func TestCascadeCeiling_GitBoundary_FileNotJustDirectory(t *testing.T) {
 	outside := t.TempDir()
-	writeCascadeFile(t, outside, "config", `github_repo = "should-never-be-read"`)
+	writeCascadeFile(t, outside, "config", "[k8s_audit]\ncluster = \"should-never-be-read\"\n")
 
 	worktree := filepath.Join(outside, "worktree")
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
@@ -325,8 +327,8 @@ func TestCascadeCeiling_GitBoundary_FileNotJustDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigResolved: %v", err)
 	}
-	if rc.Config.GithubRepo != "" {
-		t.Errorf("GithubRepo = %q, want empty -- a .git FILE (worktree pointer) must stop the walk exactly like a .git directory", rc.Config.GithubRepo)
+	if rc.Config.K8sAudit.Cluster != "" {
+		t.Errorf("K8sAudit.Cluster = %q, want empty -- a .git FILE (worktree pointer) must stop the walk exactly like a .git directory", rc.Config.K8sAudit.Cluster)
 	}
 	if rc.CeilingReason != ceilingRepoBoundary {
 		t.Errorf("CeilingReason = %q, want %q", rc.CeilingReason, ceilingRepoBoundary)

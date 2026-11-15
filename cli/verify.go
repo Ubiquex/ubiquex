@@ -1,214 +1,14 @@
 package cli
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"sort"
-	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ubiquex/ubiquex/core"
-	ghub "github.com/ubiquex/ubiquex/vcs/github"
 )
-
-// runVerifyAcceptance is `ubx why --verify-acceptance` (UBI-11 stage 1,
-// docs/architecture.md — Decision loop: "acceptance claiming a merge must
-// be checkable against git history + API anytime"). Runs two independent
-// checks:
-//
-//  1. Git: p.Acceptance.MergeSHA still exists in repoDir's history, and
-//     the proposal file at that exact commit still hashes to p.ID. Either
-//     failing is a hard error — an acceptance record that can no longer be
-//     verified against the history it claims is a serious finding, not a
-//     soft one.
-//  2. GitHub API (only if githubRepo is supplied): the PR's *current*
-//     approving reviewers are re-fetched and compared to what's recorded.
-//     A mismatch (e.g. a reviewer dismissed their approval after the fact)
-//     is reported clearly but does not fail the command — the ledger
-//     entry correctly recorded what was true at acceptance time; reality
-//     having moved on since is exactly the kind of thing this check
-//     exists to surface, not evidence the ledger itself is wrong.
-//
-// Non-pr_merge acceptances (or proposals with no acceptance at all) are
-// reported as not applicable, not an error.
-//
-// Exit code is a CI contract (UBI-20, docs/exit-codes.mdx): a git-history
-// failure (commit gone, file gone/rehashed at that commit) or a reviewer
-// mismatch means the claimed acceptance doesn't check out -- an
-// actionable finding, exit 1. A genuine tool/network failure (can't run
-// git, can't reach the GitHub API, a malformed --github-repo) is exit 2.
-// Nothing to check, or everything checks out, is exit 0.
-//
-// jsonMode suppresses every human-text print to out (UBI-20 workstream 2:
-// `ubx why --json` emits exactly one JSON document, never mixed with the
-// human-format progress lines) -- the checks and their exit-code
-// classification are identical either way, only the reporting differs.
-// The returned *verifyAcceptanceJSON is always non-nil and is `why --json`'s
-// "verify_acceptance" field, whether or not jsonMode is set (a caller not
-// in JSON mode can simply ignore it).
-func runVerifyAcceptance(ctx context.Context, out io.Writer, p *core.Proposal, repoDir, githubRepo string, jsonMode bool) (*verifyAcceptanceJSON, error) {
-	if !jsonMode {
-		fmt.Fprintln(out, "--- verify-acceptance ---")
-	}
-
-	if p.Acceptance == nil || p.Acceptance.Method != "pr_merge" {
-		if !jsonMode {
-			fmt.Fprintf(out, "acceptance method is %q -- nothing to re-verify (only pr_merge is derived from git/GitHub)\n", acceptanceMethod(p))
-		}
-		return &verifyAcceptanceJSON{Applicable: false}, nil
-	}
-	a := p.Acceptance
-	result := &verifyAcceptanceJSON{Applicable: true, Method: a.Method}
-
-	exists, err := ghub.CommitExists(ctx, repoDir, a.MergeSHA)
-	if err != nil {
-		return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
-	}
-	if !exists {
-		return result, &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: %w: %s no longer exists in %s's history", ghub.ErrCommitNotFound, a.MergeSHA, repoDir)}
-	}
-	if !jsonMode {
-		fmt.Fprintf(out, "git: merge commit %s exists in %s\n", a.MergeSHA, repoDir)
-	}
-
-	if a.ProposalFile != "" {
-		content, err := ghub.FileAtCommit(ctx, repoDir, a.MergeSHA, a.ProposalFile)
-		if err != nil {
-			return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
-		}
-		var atCommit core.Proposal
-		if err := json.Unmarshal(content, &atCommit); err != nil {
-			return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: parse %s at %s: %w", a.ProposalFile, a.MergeSHA, err)}
-		}
-		hash, err := core.Hash(&atCommit)
-		if err != nil {
-			return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: %w", err)}
-		}
-		if hash != p.ID {
-			return result, &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: %w: %s at %s now hashes to %s, not %s",
-				core.ErrTrailerHashMismatch, a.ProposalFile, a.MergeSHA, hash, p.ID)}
-		}
-		if !jsonMode {
-			fmt.Fprintf(out, "git: %s at that commit still hashes to %s\n", a.ProposalFile, p.ID)
-		}
-	}
-	result.GitOK = true
-
-	// UBI-160 Phase 1 added GitLab-derived pr_merge acceptances, but the
-	// reviewer re-check below is still GitHub-only -- a real, named gap,
-	// not silently glossed over: reporting the ordinary "--github-repo"
-	// message for a GitLab-sourced acceptance would be actively
-	// misleading (that flag can never satisfy this check for it).
-	if a.Platform == "gitlab" || a.Platform == "azure-devops" || a.Platform == "bitbucket-server" {
-		if !jsonMode {
-			fmt.Fprintf(out, "%s API: skipped -- reviewer re-check against %s is not yet supported (only GitHub); git history above already checked\n",
-				a.Platform, platformDisplayName(a.Platform))
-		}
-		return result, nil
-	}
-
-	if githubRepo == "" {
-		if !jsonMode {
-			fmt.Fprintln(out, "github API: skipped (no --github-repo given) -- reviewer re-check is inconclusive, not a pass")
-		}
-		return result, nil
-	}
-	owner, repo, ok := strings.Cut(githubRepo, "/")
-	if !ok || owner == "" || repo == "" {
-		return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: --github-repo must be \"owner/name\", got %q", githubRepo)}
-	}
-
-	var apiOpts []ghub.Option
-	if base := os.Getenv("UBX_GITHUB_API_BASE_URL"); base != "" {
-		apiOpts = append(apiOpts, ghub.WithBaseURL(base))
-	}
-	api, err := ghub.New(os.Getenv("GITHUB_TOKEN"), apiOpts...)
-	if err != nil {
-		return result, err
-	}
-
-	current, err := api.ApprovingReviewers(ctx, owner, repo, a.PRNumber)
-	if err != nil {
-		if !jsonMode {
-			fmt.Fprintf(out, "github API: could not re-fetch reviews for PR #%d: %v\n", a.PRNumber, err)
-		}
-		return result, &ExitCodeError{Code: 2, Err: fmt.Errorf("verify-acceptance: could not re-fetch reviews for PR #%d: %w", a.PRNumber, err)}
-	}
-	result.ReviewersChecked = true
-	result.CurrentApprovers = current
-	result.RecordedApprovers = a.Approvers
-	result.ReviewersMatch = sameSet(current, a.Approvers)
-
-	if result.ReviewersMatch {
-		if !jsonMode {
-			fmt.Fprintf(out, "github API: PR #%d's approvers are unchanged (%v)\n", a.PRNumber, current)
-		}
-		return result, nil
-	}
-	if !jsonMode {
-		fmt.Fprintf(out, "github API: MISMATCH -- PR #%d's approvers are now %v, recorded acceptance has %v\n",
-			a.PRNumber, current, a.Approvers)
-	}
-	return result, &ExitCodeError{Code: 1, Err: fmt.Errorf("verify-acceptance: PR #%d's approving reviewers changed since acceptance (see above)", a.PRNumber)}
-}
-
-// verifyAcceptanceJSON is `ubx why --json --verify-acceptance`'s
-// "verify_acceptance" field (UBI-20 workstream 2). Applicable is false for
-// a non-pr_merge (or unaccepted) proposal, in which case every other field
-// is zero-valued -- not a claim that they were checked and found empty.
-type verifyAcceptanceJSON struct {
-	Applicable        bool     `json:"applicable"`
-	Method            string   `json:"method,omitempty"`
-	GitOK             bool     `json:"git_ok,omitempty"`
-	ReviewersChecked  bool     `json:"reviewers_checked"`
-	ReviewersMatch    bool     `json:"reviewers_match,omitempty"`
-	CurrentApprovers  []string `json:"current_approvers,omitempty"`
-	RecordedApprovers []string `json:"recorded_approvers,omitempty"`
-}
-
-func acceptanceMethod(p *core.Proposal) string {
-	if p.Acceptance == nil {
-		return "(none)"
-	}
-	return p.Acceptance.Method
-}
-
-// platformDisplayName renders acceptance.platform's own stored value
-// ("gitlab", "azure-devops", "bitbucket-server") as the human-facing
-// platform name used in runVerifyAcceptance's skip message.
-func platformDisplayName(platform string) string {
-	switch platform {
-	case "gitlab":
-		return "GitLab"
-	case "azure-devops":
-		return "Azure DevOps"
-	case "bitbucket-server":
-		return "Bitbucket Server"
-	default:
-		return platform
-	}
-}
-
-func sameSet(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	sa, sb := append([]string{}, a...), append([]string{}, b...)
-	sort.Strings(sa)
-	sort.Strings(sb)
-	for i := range sa {
-		if sa[i] != sb[i] {
-			return false
-		}
-	}
-	return true
-}
 
 // newVerifyCmd is UBI-38, the auditor's command: independent full-chain
 // verification, one command, offline. The product's own claim is
@@ -221,38 +21,32 @@ func sameSet(a, b []string) bool {
 // so one broken link is a reported finding, not a command crash), every
 // sealed apply record's own hash and its prior-sealed-attempt chaining,
 // every $redacted marker's own inner shape (core.IsRedactedValue only
-// ever checked the outer shape), and -- where a --repo-dir is given --
-// re-derives every pr_merge acceptance against git history (network-
-// optional) and, with --github-repo too, the GitHub API (see
-// runVerifyAcceptance, reused completely unchanged; this command's own
-// job is to run it once per pr_merge-accepted proposal the chain walk
-// found, not to reimplement it).
+// ever checked the outer shape).
 //
-// Read-only, no provider, no credentials needed for the offline core
-// (hash/chain/apply/redacted checks) -- --repo-dir/--github-repo are the
-// one opt-in exception, and even then it's read-only git/API calls, never
-// a write anywhere. A loopback acceptance (UBI-298) is re-checked offline
+// Read-only, offline, no provider and no credentials. A loopback acceptance (UBI-298) is re-checked offline
 // from the ledger alone: its stored render, that render's hash, and a
 // fresh render of the proposal. Local acceptance is reported as convenience-tier --
 // there is nothing to independently re-derive it against, and reporting
 // it as "verified" would be exactly the kind of rounding-up this command
 // exists to refuse.
 //
+// An acceptance from a method that has since been removed (pr_merge and
+// pr_review, UBI-300) is history: the record still reads and the chain
+// still verifies, but nothing exists any more to re-derive it against, so
+// it is reported as exactly that and never as verified, failed or
+// crashed.
+//
 // Exit codes (UBI-20): 0 everything checks out; 1 a real finding (a
-// broken hash, a chain break, a failed acceptance re-derivation); 2 a
-// genuine error (corrupt head, network/tool failure re-deriving
-// acceptance). An inconclusive acceptance check (no --repo-dir given, or
-// --repo-dir given but no --github-repo for the reviewer re-check) is
-// reported honestly and never rounds up to either 1 or 2 -- "couldn't
-// check" and "checked and found a problem" are not the same claim.
+// broken hash, a chain break, a failed acceptance re-check); 2 a genuine
+// error (corrupt head, an unreadable store). An inconclusive acceptance
+// check is reported honestly and never rounds up to either 1 or 2 --
+// "couldn't check" and "checked and found a problem" are not the same
+// claim.
 func newVerifyCmd() *cobra.Command {
 	var (
-		ledgerDir  string
-		stack      string
-		repoDir    string
-		githubRepo string
-		jsonOut    bool
-		timeout    time.Duration
+		ledgerDir string
+		stack     string
+		jsonOut   bool
 	)
 
 	cmd := &cobra.Command{
@@ -267,7 +61,6 @@ func newVerifyCmd() *cobra.Command {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("verify: %w", err)}
 			}
 			applyStackDefault(cmd, &stack, cfg)
-			applyGithubRepoDefault(cmd, &githubRepo, cfg)
 
 			ledger, closeLedger, err := openLedgerForStack(cmd.Context(), ledgerDir, stack, cfg)
 			if err != nil {
@@ -287,7 +80,7 @@ func newVerifyCmd() *cobra.Command {
 			}
 
 			var checks []acceptanceCheckJSON
-			derived, convenience, inconclusive := 0, 0, 0
+			derived, convenience, inconclusive, removed := 0, 0, 0, 0
 			for _, p := range result.Proposals {
 				if stack != "" && p.Stack != stack {
 					continue
@@ -302,44 +95,12 @@ func newVerifyCmd() *cobra.Command {
 						ProposalID: p.ID, Method: "local", OK: true,
 						Note: "convenience-tier acceptance -- nothing to independently re-derive it against",
 					})
-				case "pr_merge":
-					if repoDir == "" {
-						inconclusive++
-						checks = append(checks, acceptanceCheckJSON{
-							ProposalID: p.ID, Method: "pr_merge", Inconclusive: true,
-							Note: "not re-verified -- no --repo-dir given",
-						})
-						continue
-					}
-					ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-					vres, verr := runVerifyAcceptance(ctx, io.Discard, p, repoDir, githubRepo, true)
-					cancel()
-
-					entry := acceptanceCheckJSON{ProposalID: p.ID, Method: "pr_merge"}
-					if vres != nil {
-						entry.GitOK = vres.GitOK
-						entry.ReviewersChecked = vres.ReviewersChecked
-						entry.ReviewersMatch = vres.ReviewersMatch
-					}
-					switch {
-					case verr == nil && vres != nil && vres.GitOK && !vres.ReviewersChecked:
-						// Git history checks out; the GitHub reviewer
-						// re-check never ran at all (no --github-repo) --
-						// inconclusive on that half, not a pass rounded up.
-						entry.Inconclusive = true
-						entry.Note = "git history checks out; reviewer re-check not run -- no --github-repo given"
-						inconclusive++
-					case verr == nil:
-						entry.OK = true
-						derived++
-					default:
-						entry.Note = verr.Error()
-						derived++
-						if code := exitCodeOf(verr); code > worst {
-							worst = code
-						}
-					}
-					checks = append(checks, entry)
+				case "pr_merge", "pr_review":
+					removed++
+					checks = append(checks, acceptanceCheckJSON{
+						ProposalID: p.ID, Method: p.Acceptance.Method, RemovedMethod: true,
+						Note: core.RemovedAcceptanceMethod(p.Acceptance.Method),
+					})
 				case core.MethodLoopback:
 					// UBI-298: re-checked from the ledger alone -- the
 					// stored render, its hash, and a fresh render of the
@@ -384,6 +145,7 @@ func newVerifyCmd() *cobra.Command {
 						Derived:      derived,
 						Convenience:  convenience,
 						Inconclusive: inconclusive,
+						Removed:      removed,
 						Checks:       checks,
 					},
 				}
@@ -391,7 +153,7 @@ func newVerifyCmd() *cobra.Command {
 					return &ExitCodeError{Code: 2, Err: err}
 				}
 			} else {
-				renderVerifyHuman(out, result, checks, derived, convenience, inconclusive)
+				renderVerifyHuman(out, result, checks, derived, convenience, inconclusive, removed)
 			}
 
 			if worst == 0 {
@@ -403,14 +165,11 @@ func newVerifyCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&ledgerDir, "ledger-dir", ".", "root directory containing ledger/ and .ubx/")
 	cmd.Flags().StringVar(&stack, "stack", "", "which stack to verify -- required only for a remote [ledger] store; git-local verifies every proposal in the chain regardless of stack, --stack narrows which findings get reported")
-	cmd.Flags().StringVar(&repoDir, "repo-dir", "", "local git working tree to re-derive pr_merge acceptances against (omit to report them as inconclusive rather than attempt it)")
-	cmd.Flags().StringVar(&githubRepo, "github-repo", "", "owner/name of the GitHub repository, for the reviewer re-check half of pr_merge re-derivation (git-history re-check runs without it, given --repo-dir)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit one JSON document instead of human text")
-	cmd.Flags().DurationVar(&timeout, "timeout", time.Minute, "timeout for each pr_merge acceptance's own re-derivation call (only with --repo-dir)")
 	return cmd
 }
 
-func renderVerifyHuman(out io.Writer, result *core.VerifyResult, checks []acceptanceCheckJSON, derived, convenience, inconclusive int) {
+func renderVerifyHuman(out io.Writer, result *core.VerifyResult, checks []acceptanceCheckJSON, derived, convenience, inconclusive, removed int) {
 	fmt.Fprintf(out, "verify: %d proposal(s) checked\n", result.ProposalsChecked)
 	for _, f := range result.Findings {
 		fmt.Fprintf(out, "  %s: %s -- %s\n", f.ProposalID, f.Kind, f.Detail)
@@ -421,7 +180,11 @@ func renderVerifyHuman(out io.Writer, result *core.VerifyResult, checks []accept
 		fmt.Fprintf(out, "chain: BROKEN (%d finding(s), see above)\n", len(result.Findings))
 	}
 
-	fmt.Fprintf(out, "acceptance: %d re-derived, %d convenience-tier (local), %d inconclusive\n", derived, convenience, inconclusive)
+	fmt.Fprintf(out, "acceptance: %d re-derived, %d convenience-tier (local), %d inconclusive", derived, convenience, inconclusive)
+	if removed > 0 {
+		fmt.Fprintf(out, ", %d from a removed method (not re-verified)", removed)
+	}
+	fmt.Fprintln(out)
 	for _, c := range checks {
 		if c.OK && c.Method == core.MethodLoopback {
 			// A passing loopback check is printed, unlike other passes,
@@ -430,6 +193,10 @@ func renderVerifyHuman(out io.Writer, result *core.VerifyResult, checks []accept
 			continue
 		}
 		if c.OK || c.Method == "local" {
+			continue
+		}
+		if c.RemovedMethod {
+			fmt.Fprintf(out, "  %s (%s): NOT RE-VERIFIED -- %s\n", c.ProposalID, c.Method, c.Note)
 			continue
 		}
 		status := "INCONCLUSIVE"
@@ -443,7 +210,7 @@ func renderVerifyHuman(out io.Writer, result *core.VerifyResult, checks []accept
 func countFailedAcceptance(checks []acceptanceCheckJSON) int {
 	n := 0
 	for _, c := range checks {
-		if !c.OK && !c.Inconclusive && c.Method != "local" {
+		if !c.OK && !c.Inconclusive && !c.RemovedMethod && c.Method != "local" {
 			n++
 		}
 	}
@@ -490,20 +257,25 @@ func chainFindingsToJSON(findings []core.ChainFinding) []chainFindingJSON {
 }
 
 type verifyAcceptanceSummaryJSON struct {
-	Derived      int                   `json:"derived"`
-	Convenience  int                   `json:"convenience_tier"`
-	Inconclusive int                   `json:"inconclusive"`
-	Checks       []acceptanceCheckJSON `json:"checks,omitempty"`
+	Derived      int `json:"derived"`
+	Convenience  int `json:"convenience_tier"`
+	Inconclusive int `json:"inconclusive"`
+	// Removed counts acceptances from a method that no longer exists
+	// (pr_merge, pr_review; UBI-300). History: read and chain-verified,
+	// never re-derived. Additive under format 1.
+	Removed int                   `json:"removed_method"`
+	Checks  []acceptanceCheckJSON `json:"checks,omitempty"`
 }
 
 type acceptanceCheckJSON struct {
-	ProposalID       string `json:"proposal_id"`
-	Method           string `json:"method"`
-	OK               bool   `json:"ok"`
-	Inconclusive     bool   `json:"inconclusive,omitempty"`
-	GitOK            bool   `json:"git_ok,omitempty"`
-	ReviewersChecked bool   `json:"reviewers_checked,omitempty"`
-	ReviewersMatch   bool   `json:"reviewers_match,omitempty"`
+	ProposalID   string `json:"proposal_id"`
+	Method       string `json:"method"`
+	OK           bool   `json:"ok"`
+	Inconclusive bool   `json:"inconclusive,omitempty"`
+	// RemovedMethod marks an acceptance from a method that no longer
+	// exists (UBI-300). The pr_merge-only git_ok/reviewers_checked/
+	// reviewers_match fields went with the re-derivation they reported.
+	RemovedMethod bool `json:"removed_method,omitempty"`
 	// Outcome is set for method "loopback" only (UBI-298): one of
 	// verified, no_rendered_hash, rendered_missing,
 	// rendered_hash_mismatch, rerender_differs, renderer_version_changed
@@ -511,4 +283,16 @@ type acceptanceCheckJSON struct {
 	// apart without parsing Note. Additive under format 1.
 	Outcome string `json:"outcome,omitempty"`
 	Note    string `json:"note,omitempty"`
+}
+
+// methodLabel is how an acceptance method reads to a person: the recorded
+// value, marked when it names a method that no longer exists (pr_merge,
+// pr_review; UBI-300). The record is history and shown as recorded; the
+// mark keeps a reader from taking it for a method they can still use.
+// JSON output keeps the raw recorded value.
+func methodLabel(method string) string {
+	if core.RemovedAcceptanceMethod(method) != "" {
+		return method + " (removed method)"
+	}
+	return method
 }

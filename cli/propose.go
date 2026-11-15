@@ -10,10 +10,11 @@ import (
 	"github.com/ubiquex/ubiquex/core"
 )
 
-// newProposeCmd is UBI-11 stage 1, unchanged since before UBI-224: an
-// author resolves a draft proposal and needs its canonical hash to
-// embed in a PR body's "ubx-proposal: <hash>" trailer, before anyone
-// reviews anything and long before `ubx accept --from-merge` runs.
+// newProposeCmd is UBI-11 stage 1: print a draft proposal's canonical
+// hash. It existed to put that hash in a pull request body's
+// "ubx-proposal: <hash>" trailer for `ubx accept --from-merge`, and that
+// workflow was removed in UBI-300. The command still computes the hash
+// correctly; whether it stays is a decision about the CLI surface.
 // Never touches a ledger -- a pure function of the file's own content,
 // the same core.Hash `ubx accept`'s local tier uses internally.
 //

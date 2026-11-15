@@ -805,6 +805,8 @@ fixture.
 
 ### 11.3 Needs real credentials, not exercised anywhere in this plan
 
+> **Amended (UBI-300, 2026-11-15):** `ubx accept --from-merge`, `ubx why --verify-acceptance`, `ubx verify --repo-dir` and `ubx server` below no longer exist.
+
 Treat these as unverified by this document:
 
 - **`ubx scan --discover`**, which enumerates through the AWS Resource

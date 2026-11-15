@@ -2,6 +2,14 @@
 
 ## Changelog
 
+- 2026-11-15 -- UBI-300: `ubx server`, `server/`, `vcs/`, the Dockerfile,
+  `accept --from-merge`, `why --verify-acceptance`, `verify`'s
+  re-derivation flags, `scan --surface-as` and the VCS config keys are
+  removed. The `pr_merge` and `pr_review` methods are gone from `core`; their
+  `Acceptance` fields stay read-only so existing records still read, and
+  `ubx verify` reports them as from a removed method. `server/drift.go`,
+  `allowlist.go` and `stackdiscovery.go` last exist at `cadaf6d`. See
+  docs/architecture.md's UBI-300 amendment.
 - 2026-11-15 -- UBI-301: `writeback`, `hclstack`, `diagram` and
   `mdrender` are removed, with `ubx writeback`, `revert-plan --tf-dir`,
   `scan --surface-as`'s `.tf` preview, `tf_dir`, `.ubx.hcl` in `ubx plan`

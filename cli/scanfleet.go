@@ -21,17 +21,11 @@ import (
 // occurs here -- --discover (a different verb entirely) is still the only
 // way to find a resource nothing has recorded yet.
 //
-// --json/--out/--out-dir/--surface-as are all single-resource-only
-// concerns (validated by the caller before ever reaching here) -- a fleet
-// walk's own output is N independent cards, not one document, and
-// --surface-as's GitHub receipt is built around exactly one drift_adopt.
-// surfaceFunc is runScanFleet's own optional per-drift surfacing hook
-// (UBI-165). Nil means "just save the proposal", the behavior every
-// caller had before drift-watch needed a fleet-wide walk that also
-// opens one issue or pull request per drifted resource.
-type surfaceFunc func(p *core.Proposal, addr core.Address) error
+// --json/--out/--out-dir are single-resource-only concerns (validated by
+// the caller before ever reaching here) -- a fleet walk's own output is N
+// independent cards, not one document.
 
-func runScanFleet(ctx context.Context, out io.Writer, st *styler, ledger *core.Ledger, ledgerDir, stack, propose string, noAttribution bool, cfg *Config, providerPath, source, providerVersion, providerConfig string, surface surfaceFunc) error {
+func runScanFleet(ctx context.Context, out io.Writer, st *styler, ledger *core.Ledger, ledgerDir, stack, propose string, noAttribution bool, cfg *Config, providerPath, source, providerVersion, providerConfig string) error {
 	fleet, err := ledger.Fleet(stack)
 	if err != nil {
 		return &ExitCodeError{Code: 2, Err: fmt.Errorf("scan --stack %s: %w", stack, err)}
@@ -71,23 +65,11 @@ func runScanFleet(ctx context.Context, out io.Writer, st *styler, ledger *core.L
 			return nil
 		}
 		driftedCount++
-		hashes, adopt, gerr := generateProposeSaveAndRender(ctx, out, st, ledger, ledgerDir, stack, e.Address, res, propose, noAttribution, cfg.K8sAudit, pConfig, pSource)
+		hashes, _, gerr := generateProposeSaveAndRender(ctx, out, st, ledger, ledgerDir, stack, e.Address, res, propose, noAttribution, cfg.K8sAudit, pConfig, pSource)
 		if gerr != nil {
 			return gerr
 		}
 		proposalCount += len(hashes)
-		// One issue/pull request per drifted resource, never one for the
-		// whole sweep: a receipt is built around a single drift_adopt
-		// proposal, and an operator triaging drift wants them separable.
-		// A surfacing failure on one resource is reported and does not
-		// abort the rest of the walk, the same "one bad stack shouldn't
-		// block a fleet-wide sweep" reasoning this function already
-		// applies to an unreadable resource.
-		if surface != nil && adopt != nil {
-			if serr := surface(adopt, e.Address); serr != nil {
-				fmt.Fprintf(out, "  surfacing %s failed: %v\n", e.Address, serr)
-			}
-		}
 		return nil
 	}
 
@@ -178,7 +160,7 @@ func runScanFleet(ctx context.Context, out io.Writer, st *styler, ledger *core.L
 // drift_adopt attribution, plan-store save, and card rendering shared by
 // both single-resource and fleet-scoped scan (UBI-49 residual round 1) --
 // everything downstream of "a real ScanResult was found" that doesn't
-// depend on --json/--out/--surface-as, which stay single-resource-only
+// depend on --json/--out, which stay single-resource-only
 // concerns their own caller (newScanCmd's RunE) still handles alone --
 // jsonOut short-circuits before ever rendering a card at all, and --out
 // only ever makes sense for a single generated proposal.

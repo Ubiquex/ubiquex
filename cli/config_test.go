@@ -36,7 +36,7 @@ func TestLoadConfig_NoConfigAnywhere(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Stack != "" || cfg.GithubRepo != "" || cfg.GitlabProject != "" || len(cfg.ProviderConfig) != 0 ||
+	if cfg.Stack != "" || len(cfg.ProviderConfig) != 0 ||
 		cfg.Provider.Path != "" || cfg.Provider.Source != "" || cfg.Provider.Version != "" {
 		t.Fatalf("got %+v, want a zero Config", cfg)
 	}
@@ -118,13 +118,11 @@ func TestLoadConfig_IntentShowDefaults_AbsentIsNil(t *testing.T) {
 
 func TestLoadConfig_FullyParsedFields(t *testing.T) {
 	dir := t.TempDir()
-	// Root-level keys (stack/github_repo/gitlab_project) come BEFORE any [table]
+	// Root-level keys (stack) come BEFORE any [table]
 	// header -- see TestLoadConfig_RootKeysAfterTableGetSwallowed for why
 	// that ordering is load-bearing, not cosmetic.
 	writeConfig(t, dir, `
 stack = "payments"
-github_repo = "acme/infra"
-gitlab_project = "./terraform"
 
 [provider]
 source = "hashicorp/aws"
@@ -150,8 +148,8 @@ log_group = "/aws/eks/my-eks-cluster/cluster"
 	if cfg.ProviderConfig["region"] != "us-east-1" {
 		t.Errorf("ProviderConfig[region] = %v, want us-east-1", cfg.ProviderConfig["region"])
 	}
-	if cfg.Stack != "payments" || cfg.GithubRepo != "acme/infra" || cfg.GitlabProject != "./terraform" {
-		t.Errorf("got Stack=%q GithubRepo=%q GitlabProject=%q, want payments/acme/infra/./terraform", cfg.Stack, cfg.GithubRepo, cfg.GitlabProject)
+	if cfg.Stack != "payments" {
+		t.Errorf("got Stack=%q, want payments", cfg.Stack)
 	}
 	wantK8sAudit := K8sAuditConfig{Cluster: "my-eks-cluster", Region: "us-west-2", LogGroup: "/aws/eks/my-eks-cluster/cluster"}
 	if cfg.K8sAudit != wantK8sAudit {

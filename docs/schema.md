@@ -310,6 +310,8 @@ optional, no `schema_version` bump.
 
 ### Amendment: `pr_merge` acceptance fields (2026-07-11, UBI-11 stage 1)
 
+> **Superseded (UBI-300, 2026-11-15):** the method is removed and nothing writes it. The fields this amendment added stay on `Acceptance`, read-only, so existing records keep their meaning. See the UBI-300 amendment at the end of this document.
+
 `acceptance.pr_number` is added: the GitHub pull request number the
 `merge_sha` belongs to, for `method: "pr_merge"` acceptances. Purely a
 convenience — everything needed to re-derive acceptance is already
@@ -358,6 +360,8 @@ whose hash doesn't match the proposal file's own recomputed hash, as a
 hard failure — see docs/architecture.md's "hash mismatch" case.
 
 ### Amendment: `pr_merge` acceptance platform field (2026-08-14, UBI-160 Phase 1)
+
+> **Superseded (UBI-300, 2026-11-15):** the method is removed and nothing writes it. The fields this amendment added stay on `Acceptance`, read-only, so existing records keep their meaning. See the UBI-300 amendment at the end of this document.
 
 `acceptance.platform` is added: `"github"` | `"gitlab"`, only meaningful
 for `method: "pr_merge"` -- which platform's own API `merge_sha`/
@@ -412,6 +416,8 @@ missing `--github-repo` is. Extending the re-check itself to GitLab is
 real, scoped-out follow-up work, not done in this amendment.
 
 ### Amendment: `pr_review` acceptance method (2026-08-18, UBI-28 Phase 1)
+
+> **Superseded (UBI-300, 2026-11-15):** the method is removed and nothing writes it. The fields this amendment added stay on `Acceptance`, read-only, so existing records keep their meaning. See the UBI-300 amendment at the end of this document.
 
 `acceptance.method` gains a third value, `"pr_review"`, alongside
 `"pr_merge"` and `"local"`. `ubx server`'s GitHub App triggers this tier
@@ -2925,3 +2931,24 @@ hashed.
 
 `ubx verify` re-checking a `loopback` acceptance is UBI-298. Nothing calls
 `AcceptFromLoopback` yet; the loopback page that will is UBI-295.
+
+### Amendment: `pr_merge` and `pr_review` removed; their fields kept read-only (2026-11-15, UBI-300)
+
+**No shape change.** `pr_merge` and `pr_review` are no longer written: the
+pull-request workflow that produced them, `ubx accept --from-merge` and
+`ubx server`, is gone. `Acceptance.method` takes `local` or `loopback` going
+forward.
+
+The fields only those methods wrote stay on `Acceptance`, read-only:
+`platform`, `merge_sha`, `pr_number`, `proposal_file` and `review_comment`.
+Acceptance is excluded from hashed content, so removing them would move no
+hash. It would, however, make every existing record silently lose its
+merge commit, pull request and approvers on read, and a record that reads
+but no longer says what happened is the failure this change must not
+cause. `core.RemovedAcceptanceMethod` identifies the two methods, and
+`ubx verify` reports such records as from a removed method, without
+re-deriving, failing or changing the exit code.
+
+No `schema_version` bump: nothing written changes shape, and nothing
+already written is reinterpreted.
+
