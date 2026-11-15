@@ -20,7 +20,7 @@ func connectMCPTestClientServing(t *testing.T, roots ...string) *mcp.ClientSessi
 	}
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := newMCPServer(served).Connect(ctx, serverTransport, nil)
+	serverSession, err := newMCPServer(served, nil).Connect(ctx, serverTransport, nil)
 	if err != nil {
 		t.Fatalf("server.Connect: %v", err)
 	}

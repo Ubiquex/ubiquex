@@ -48,10 +48,15 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
+
+	"github.com/ubiquex/ubiquex/approval"
 )
 
 func newMCPCmd() *cobra.Command {
-	var serve []string
+	var (
+		serve          []string
+		approvalListen string
+	)
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Serve ubx's read-only and blueprint-authoring tools over MCP, for an AI assistant to call directly",
@@ -74,9 +79,20 @@ name, never by a path. They answer what an agent needs before it can propose a c
   state    one served stack's resources from its ledger; with an address, that resource's full state
   schema   the resource types a served stack's providers offer; with a type, its attributes
 
+Two tools change a served stack, and neither can approve anything:
+
+  plan     an ubx:intent/v1 change -> a pending proposal, its hash, and an approval URL for a human
+  apply    a proposal hash -> refused until a human has approved it; then shipped, idempotently
+
+There is no approve tool. Approval happens on a page this server serves on loopback
+(--approval-listen, default 127.0.0.1 on a free port): it shows the human the deterministic render
+of the proposal, stores those exact bytes, and on approval records an acceptance with method
+"loopback", approver "loopback:presence" (someone at this machine clicked; nothing about who) and
+the hash of what was shown. ubx verify re-checks such an acceptance against the stored bytes.
+
 A stack is served only when named with --serve <stack-root> (repeatable), and its .ubx/config must
-set stack = "<name>". Without --serve these three report that nothing is served, and nothing else
-changes.
+set stack = "<name>". Without --serve these five report that nothing is served, no approval page is
+started, and nothing else changes.
 
 Five blueprint-authoring tools (UBI-223), independent, callable in any order:
 
@@ -86,12 +102,11 @@ Five blueprint-authoring tools (UBI-223), independent, callable in any order:
   list_blueprints    a directory tree -> every real Ubxfile found in it
   describe_blueprint one already-known ref (git/oci/tarball/local) -> its name, params, resources
 
-Boundary by omission: ubx accept/ship/writeback/revert-plan (and scan --surface-as, which opens a real
-GitHub issue/PR, and blueprint push) are NOT exposed here, deliberately. Accepting a proposal (or
-publishing a blueprint) is a recorded human (or PR-merge-derived) decision -- never something an
-assistant does on a human's behalf mid-conversation. This server surfaces information and, for blueprint
-authoring, returns generated content; it never signs anything, never writes to a live resource or a real
-repository, and never appends to the ledger.
+Boundary by omission: ubx accept/writeback/revert-plan (and scan --surface-as, which opens a real
+GitHub issue/PR, and blueprint push) are NOT exposed here, deliberately, and no tool approves a
+proposal. Accepting a proposal (or publishing a blueprint) is a recorded human (or PR-merge-derived)
+decision -- never something an assistant does on a human's behalf mid-conversation. apply ships only
+what the ledger already shows a human accepted; the approval page, not any tool, appends acceptances.
 
 Every tool taking ledger_dir refuses a path that isn't a ubx stack root (a directory holding .ubx/)
 rather than reporting it as a ledger that happens to be empty, and expands a leading ~/ against this
@@ -110,21 +125,33 @@ ledger checkout to get the same defaults a human sitting there would (see ubx co
 			if err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("mcp: %w", err)}
 			}
-			if err := newMCPServer(served).Run(cmd.Context(), &mcp.StdioTransport{}); err != nil {
+			var channel approval.Channel
+			if len(served.byName) > 0 {
+				page, err := approval.NewLoopback(approvalListen, pendingLookup(served), servedPlanConsumed(served))
+				if err != nil {
+					return &ExitCodeError{Code: 2, Err: fmt.Errorf("mcp: %w", err)}
+				}
+				defer page.Close()
+				fmt.Fprintf(cmd.ErrOrStderr(), "ubx mcp: approval page at %s, serving %s\n", page.URL(), strings.Join(served.names(), ", "))
+				channel = page
+			}
+			if err := newMCPServer(served, channel).Run(cmd.Context(), &mcp.StdioTransport{}); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("mcp: %w", err)}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringArrayVar(&serve, "serve", nil, "a stack root (a directory holding .ubx/, whose .ubx/config sets stack) that the stacks, state and schema tools may see; repeatable. Nothing outside these is visible to them")
+	cmd.Flags().StringArrayVar(&serve, "serve", nil, "a stack root (a directory holding .ubx/, whose .ubx/config sets stack) that stacks, state, schema, plan and apply may see; repeatable. Nothing outside these is visible to them")
+	cmd.Flags().StringVar(&approvalListen, "approval-listen", "127.0.0.1:0", "where the approval page listens; must be a loopback IP. Port 0 picks a free port, printed to stderr at startup")
 	return cmd
 }
 
 // newMCPServer builds the ubx MCP server with every tool registered, the
-// served-stack tools over served (nil serves nothing). Factored out from
+// served-stack tools over served (nil serves nothing) and plan/apply
+// handing approval to channel (nil when nothing is served). Factored out from
 // newMCPCmd's RunE so tests can connect to it directly over an in-memory
 // transport (mcp.NewInMemoryTransports), never a real stdio subprocess.
-func newMCPServer(served *servedStacks) *mcp.Server {
+func newMCPServer(served *servedStacks, channel approval.Channel) *mcp.Server {
 	if served == nil {
 		served = &servedStacks{byName: map[string]*servedStack{}}
 	}
@@ -132,6 +159,8 @@ func newMCPServer(served *servedStacks) *mcp.Server {
 	registerStacksTool(server, served)
 	registerStateTool(server, served)
 	registerSchemaTool(server, served)
+	registerPlanTool(server, served, channel)
+	registerApplyTool(server, served, channel)
 	registerWhyTool(server)
 	registerStatusTool(server)
 	registerScanTool(server)
