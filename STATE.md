@@ -21,7 +21,7 @@ proposal". Next, in order: UBI-294 (`Acceptance.RenderedHash`, a
 merged between then and #219, and the rest of this file was not re-walked
 on 2026-11-15. Treat everything below as possibly stale until a session
 rewrites it under rule 3. That rewrite is deliberately not part of the
-UBI-296/230/234 PRs.
+UBI-296, UBI-294 and UBI-298 PRs.
 
 **ubx v0.6.0 is released (2026-09-13).** Two things that were quietly
 untrue are now true: a blueprint's content hash reaches the ledger on
