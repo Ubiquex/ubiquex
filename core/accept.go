@@ -104,7 +104,7 @@ func AcceptFromReview(l *Ledger, p *Proposal, claimedHash string, review ReviewA
 }
 
 // MethodLoopback is Acceptance.Method for approval obtained on the local
-// MCP server's loopback page (UBX-230).
+// MCP server's loopback page (UBI-294).
 const MethodLoopback = "loopback"
 
 // LoopbackApprover is the only value a loopback acceptance's Approvers
@@ -112,7 +112,7 @@ const MethodLoopback = "loopback"
 // rather than an identity nobody verified.
 const LoopbackApprover = "loopback:presence"
 
-// AcceptFromLoopback is the loopback acceptance tier (UBX-230): a human clicked approve on a page the local server served on
+// AcceptFromLoopback is the loopback acceptance tier (UBI-294): a human clicked approve on a page the local server served on
 // loopback, which showed the bytes Ledger.StageRender stored under
 // renderedHash.
 //

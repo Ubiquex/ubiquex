@@ -23,7 +23,7 @@ import (
 //	<dir>/
 //	  ledger/proposals/<id>.prop.json
 //	  ledger/applies/<id>.attempt-<n>.apply.json
-//	  ledger/rendered/<rendered-hash>.render   (UBX-230)
+//	  ledger/rendered/<rendered-hash>.render   (UBI-294)
 //	  .ubx/ledger.lock   (head pointer)
 //	  .ubx/lock          (concurrency lock)
 //	  .ubx/salt          (redaction salt)

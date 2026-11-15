@@ -51,7 +51,7 @@ type LedgerStore interface {
 
 	// ReadRendered reads the bytes stored under hash by
 	// WriteRenderedIfAbsent: what was rendered to a human approving a
-	// proposal (UBX-230, Acceptance.RenderedHash).
+	// proposal (UBI-294, Acceptance.RenderedHash).
 	// ErrStoreObjectNotFound if nothing is stored under hash. Callers
 	// verify the bytes against hash (core.Ledger.ReadRendered); a store
 	// only moves bytes, the same split as every other method here.

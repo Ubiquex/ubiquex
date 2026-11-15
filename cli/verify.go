@@ -231,7 +231,7 @@ func sameSet(a, b []string) bool {
 // Read-only, no provider, no credentials needed for the offline core
 // (hash/chain/apply/redacted checks) -- --repo-dir/--github-repo are the
 // one opt-in exception, and even then it's read-only git/API calls, never
-// a write anywhere. A loopback acceptance (UBX-234) is re-checked offline
+// a write anywhere. A loopback acceptance (UBI-298) is re-checked offline
 // from the ledger alone: its stored render, that render's hash, and a
 // fresh render of the proposal. Local acceptance is reported as convenience-tier --
 // there is nothing to independently re-derive it against, and reporting
@@ -341,7 +341,7 @@ func newVerifyCmd() *cobra.Command {
 					}
 					checks = append(checks, entry)
 				case core.MethodLoopback:
-					// UBX-234: re-checked from the ledger alone -- the
+					// UBI-298: re-checked from the ledger alone -- the
 					// stored render, its hash, and a fresh render of the
 					// proposal. Counted with the other re-derived methods.
 					lc, lerr := core.VerifyLoopbackAcceptance(ledger, p)
@@ -504,7 +504,7 @@ type acceptanceCheckJSON struct {
 	GitOK            bool   `json:"git_ok,omitempty"`
 	ReviewersChecked bool   `json:"reviewers_checked,omitempty"`
 	ReviewersMatch   bool   `json:"reviewers_match,omitempty"`
-	// Outcome is set for method "loopback" only (UBX-234): one of
+	// Outcome is set for method "loopback" only (UBI-298): one of
 	// verified, no_rendered_hash, rendered_missing,
 	// rendered_hash_mismatch, rerender_differs, renderer_version_changed
 	// (core's Loopback* constants), so a script can tell the failures

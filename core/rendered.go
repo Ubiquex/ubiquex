@@ -34,7 +34,7 @@ var ErrRenderMismatch = errors.New("proposal does not render to the approved byt
 func HashRendered(b []byte) string { return sha256Hex(b) }
 
 // StageRender is the first half of an approval that records what the
-// approver saw (UBX-230): render p, hash the bytes, store them
+// approver saw (UBI-294): render p, hash the bytes, store them
 // if absent, then read them back and return the STORED bytes for the
 // caller to show. Showing what was read back, rather than what was just
 // produced, means what the human sees is by construction what the ledger
@@ -124,7 +124,7 @@ func (c LoopbackCheck) Failed() bool {
 func (c LoopbackCheck) Inconclusive() bool { return c.Outcome == LoopbackRendererChanged }
 
 // VerifyLoopbackAcceptance re-checks a loopback acceptance from the ledger
-// alone (UBX-234): read the stored render by RenderedHash, confirm the
+// alone (UBI-298): read the stored render by RenderedHash, confirm the
 // bytes hash to it, re-render p, and confirm the result is byte-identical.
 //
 // What a pass proves: the bytes on record are the bytes the approval was

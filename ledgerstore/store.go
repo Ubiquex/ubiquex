@@ -30,7 +30,7 @@ import (
 //
 //	proposals/<id>.prop.json
 //	applies/<id>.attempt-<n>.apply.json
-//	rendered/<rendered-hash>.render -- what an approver saw (UBX-230)
+//	rendered/<rendered-hash>.render -- what an approver saw (UBI-294)
 //	heads/genesis            -- the first proposal's own ID
 //	heads/<parent-id>        -- the proposal that comes right after parent-id
 //	head-hint                -- best-effort cache, never load-bearing

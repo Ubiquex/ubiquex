@@ -490,7 +490,7 @@ func TestStore_SaltRace_ExactlyOneWinner(t *testing.T) {
 
 // TestStore_RenderedRoundTripAndCreateOnly: the blob store keeps rendered
 // bytes under rendered/, create-only, and a full stage-then-accept through
-// core.Ledger works against it (UBX-230).
+// core.Ledger works against it (UBI-294).
 func TestStore_RenderedRoundTripAndCreateOnly(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

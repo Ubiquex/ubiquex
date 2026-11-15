@@ -629,7 +629,7 @@ type InvariantCheck struct {
 // same hash-exclusion reasoning as every other Acceptance field.
 //
 // Method "loopback" and RenderedHash were added 2026-11-15 (docs/schema.md
-// -- "Amendment: rendered_hash and loopback acceptance", UBX-230): the
+// -- "Amendment: rendered_hash and loopback acceptance", UBI-294): the
 // local MCP server's approval page, where a human approves a proposal an
 // agent authored. With an agent as author, the proposal hash proves the
 // applied change matches the approved one, but not what the human was

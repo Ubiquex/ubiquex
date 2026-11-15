@@ -226,7 +226,7 @@ func TestStageRender_IdempotentAndCreateOnly(t *testing.T) {
 }
 
 // TestLedger_ReadsEntryWrittenBeforeRenderedHash: a ledger entry in the
-// exact shape written before UBX-230 (no rendered_hash key at all) reads,
+// exact shape written before UBI-294 (no rendered_hash key at all) reads,
 // verifies, and keeps its meaning.
 func TestLedger_ReadsEntryWrittenBeforeRenderedHash(t *testing.T) {
 	const preChange = `{"schema_version":2,"id":"ID","stack":"payments","parent":"","kind":"change",` +
