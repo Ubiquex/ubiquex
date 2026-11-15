@@ -51,6 +51,7 @@ import (
 )
 
 func newMCPCmd() *cobra.Command {
+	var serve []string
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Serve ubx's read-only and blueprint-authoring tools over MCP, for an AI assistant to call directly",
@@ -65,6 +66,17 @@ already produces:
   ubx_status   optional stack filter, optional live-state drift check -> fleet report, as it stands now
   ubx_history  a stack's whole proposal chain, newest first -> what has happened, including what is now gone
   ubx_scan     single resource -> new/drifted/unchanged classification + the generated proposal, inline
+
+Three tools over the stacks this server was started to serve (UBI-295), each addressed by its stack
+name, never by a path. They answer what an agent needs before it can propose a change:
+
+  stacks   the served stacks, each one's ledger head, and every live resource address
+  state    one served stack's resources from its ledger; with an address, that resource's full state
+  schema   the resource types a served stack's providers offer; with a type, its attributes
+
+A stack is served only when named with --serve <stack-root> (repeatable), and its .ubx/config must
+set stack = "<name>". Without --serve these three report that nothing is served, and nothing else
+changes.
 
 Five blueprint-authoring tools (UBI-223), independent, callable in any order:
 
@@ -94,21 +106,32 @@ ledger checkout to get the same defaults a human sitting there would (see ubx co
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := newMCPServer().Run(cmd.Context(), &mcp.StdioTransport{}); err != nil {
+			served, err := loadServedStacks(serve, cmd.ErrOrStderr())
+			if err != nil {
+				return &ExitCodeError{Code: 2, Err: fmt.Errorf("mcp: %w", err)}
+			}
+			if err := newMCPServer(served).Run(cmd.Context(), &mcp.StdioTransport{}); err != nil {
 				return &ExitCodeError{Code: 2, Err: fmt.Errorf("mcp: %w", err)}
 			}
 			return nil
 		},
 	}
+	cmd.Flags().StringArrayVar(&serve, "serve", nil, "a stack root (a directory holding .ubx/, whose .ubx/config sets stack) that the stacks, state and schema tools may see; repeatable. Nothing outside these is visible to them")
 	return cmd
 }
 
-// newMCPServer builds the ubx MCP server with all three tools
-// registered -- factored out from newMCPCmd's RunE so tests can connect
-// to it directly over an in-memory transport (mcp.NewInMemoryTransports),
-// never a real stdio subprocess.
-func newMCPServer() *mcp.Server {
+// newMCPServer builds the ubx MCP server with every tool registered, the
+// served-stack tools over served (nil serves nothing). Factored out from
+// newMCPCmd's RunE so tests can connect to it directly over an in-memory
+// transport (mcp.NewInMemoryTransports), never a real stdio subprocess.
+func newMCPServer(served *servedStacks) *mcp.Server {
+	if served == nil {
+		served = &servedStacks{byName: map[string]*servedStack{}}
+	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "ubx", Version: versionString()}, nil)
+	registerStacksTool(server, served)
+	registerStateTool(server, served)
+	registerSchemaTool(server, served)
 	registerWhyTool(server)
 	registerStatusTool(server)
 	registerScanTool(server)

@@ -409,16 +409,49 @@ var fetchDynamicSchema = loadDynamicProviderSchema
 // real precedence rule without launching anything real. The pool
 // declaredProvidersForInference itself uses is not needed here at all.
 func loadResolveProviders(ctx context.Context, cmd *cobra.Command, cfg *Config, providerPath, source, providerVersion *string) ([]resolver.DeclaredProvider, error) {
+	if len(resolveProviderPrecedence(cfg)) > 0 {
+		warnIfLegacyProviderFlagsGiven(cmd, cfg)
+	} else {
+		applyProviderDefaults(cmd, providerPath, source, providerVersion, cfg)
+	}
+	loaded, err := loadStackSchemas(ctx, cfg, *providerPath, *source, *providerVersion)
+	if err != nil {
+		return nil, err
+	}
+	providers := make([]resolver.DeclaredProvider, 0, len(loaded))
+	for _, l := range loaded {
+		providers = append(providers, resolver.DeclaredProvider{Source: l.Source, Version: l.Version, Schema: newSchemaInspector(l.Schemas)})
+	}
+	return providers, nil
+}
+
+// stackSchema is one declared provider of a stack together with its full
+// schema, as loadStackSchemas fetched it.
+type stackSchema struct {
+	Source  string
+	Version string
+	Schemas *provider.Schemas
+}
+
+// loadStackSchemas fetches the full schema of every provider a stack
+// declares, with no cobra command in sight: the provider tables in cfg
+// when it has any, otherwise the single provider named by providerPath or
+// source/providerVersion, whose defaults the caller has already applied.
+// loadResolveProviders wraps it for the CLI; `ubx mcp`'s plan and schema
+// tools call it directly, since an MCP call has no flags to consult.
+//
+// Order is the declared keys sorted, so two calls over one config always
+// agree.
+func loadStackSchemas(ctx context.Context, cfg *Config, providerPath, source, providerVersion string) ([]stackSchema, error) {
 	resolved := resolveProviderPrecedence(cfg)
 	if len(resolved) > 0 {
-		warnIfLegacyProviderFlagsGiven(cmd, cfg)
 		keys := make([]string, 0, len(resolved))
 		for k := range resolved {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 
-		var providers []resolver.DeclaredProvider
+		var out []stackSchema
 		for _, key := range keys {
 			r := resolved[key]
 			if r.Dynamic {
@@ -426,20 +459,19 @@ func loadResolveProviders(ctx context.Context, cmd *cobra.Command, cfg *Config, 
 				if err != nil {
 					return nil, err
 				}
-				providers = append(providers, resolver.DeclaredProvider{Source: r.Key, Version: "", Schema: newSchemaInspector(schemas)})
+				out = append(out, stackSchema{Source: r.Key, Version: "", Schemas: schemas})
 				continue
 			}
 			schemas, err := fetchThirdpartySchema(ctx, r.Source, r.Version)
 			if err != nil {
 				return nil, err
 			}
-			providers = append(providers, resolver.DeclaredProvider{Source: r.Source, Version: r.Version, Schema: newSchemaInspector(schemas)})
+			out = append(out, stackSchema{Source: r.Source, Version: r.Version, Schemas: schemas})
 		}
-		return providers, nil
+		return out, nil
 	}
 
-	applyProviderDefaults(cmd, providerPath, source, providerVersion, cfg)
-	path, _, err := resolveProviderBinary(ctx, *providerPath, *source, *providerVersion)
+	path, _, err := resolveProviderBinary(ctx, providerPath, source, providerVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -455,7 +487,7 @@ func loadResolveProviders(ctx context.Context, cmd *cobra.Command, cfg *Config, 
 	if closeErr != nil {
 		return nil, fmt.Errorf("close provider: %w", closeErr)
 	}
-	return []resolver.DeclaredProvider{{Source: *source, Version: *providerVersion, Schema: newSchemaInspector(schemas)}}, nil
+	return []stackSchema{{Source: source, Version: providerVersion, Schemas: schemas}}, nil
 }
 
 // inferOpIfGenerated turns the generated/authored distinction into the

@@ -36,6 +36,14 @@ different `RendererVersion` is inconclusive. `local` and `pr_merge`
 checks are unchanged. User docs: `ubx-docs-users`
 `cli-reference/verify.mdx`, on its own PR.
 
+**2026-11-15: `ubx mcp --serve` and three read tools (UBI-295, part 1).**
+`--serve <stack-root>` (repeatable) names the stacks the new agent-facing
+tools may see, by the `stack` name in each root's config, never by path.
+`stacks`, `state` (ubx_status's payload plus one resource's folded state)
+and `schema` (provider types and attributes) read them.
+`loadStackSchemas` is the cobra-free provider loader both they and
+`loadResolveProviders` use.
+
 **Flagged, not fixed: this file was last rewritten 2026-09-13.** 68 PRs
 merged between then and #219, and the rest of this file was not re-walked
 on 2026-11-15. Treat everything below as possibly stale until a session
