@@ -1,0 +1,70 @@
+ubx-render proposal/v1
+
+proposal        d9d33b5fd06d05b508077961b2b20d1a327df836003513b33859bbdbf5acbd5c
+stack           payments
+kind            change
+parent          7f3c1a9e0b2d4c6e8f1a3b5c7d9e0f2a4b6c8d0e1f3a5b7c9d1e3f5a7b9c1d3e
+schema_version  2
+
+This change creates 1, modifies 1 and destroys 1 resource(s).
+
+== CREATE (1) ==
+
++ create payments.aws_db_instance.payments-db-replica
+    config.allocated_storage = 100
+    config.engine = "postgres"
+    config.instance_class = "db.r6g.large"
+    config.parameter_overrides = {}
+    config.password = {"$secret":{"backend":"aws_secrets_manager","path":"db-password"}}
+    config.replicate_source_db = {"$computed":{"from":"payments.aws_db_instance.payments-db.identifier"}}
+    config.tags.Environment = "prod"
+    config.tags.Owner = "payments-team"
+    depends_on[0] = "payments.aws_db_instance.payments-db"
+
+== MODIFY (1) ==
+
+~ modify payments.aws_s3_bucket.payments-logs
+    lifecycle_days
+      before  (not set)
+      after   30
+    tags.Environment
+      before  "staging"
+      after   "prod"
+    versioning
+      before  false
+      after   (not set)
+    provider.source = "registry.terraform.io/hashicorp/aws"
+    provider.version = "6.2.0"
+
+== DESTROY (1) ==
+
+- destroy payments.aws_elasticache_cluster.payments-cache
+    state.engine = "redis"
+    state.node_type = "cache.t3.micro"
+    state.num_cache_nodes = 1
+
+== THE AUTHOR'S ACCOUNT, NOT CHECKED ==
+
+The author of this proposal wrote everything in this section.
+Nothing here was checked against the change above.
+
+intent.assumptions[0].affects[0] = "payments.aws_db_instance.payments-db-replica"
+intent.assumptions[0].text = "replica lives in the same subnet group"
+intent.questions[0].text = "keep the cache snapshot?"
+intent.sources[0].content_hash = "sha256:abc"
+intent.sources[0].kind = "dialogue"
+intent.sources[0].ref = "d-99f2"
+intent.summary = "add a read replica for payments and retire the old cache"
+
+== EVERYTHING ELSE IN THE PROPOSAL ==
+
+blast_radius.creates = 1
+blast_radius.destroys = 1
+blast_radius.modifies = 1
+cost_delta.monthly_usd = "142.50"
+invariants_checked[0].policy = "no-public-buckets"
+invariants_checked[0].verdict = "pass"
+resolution.inputs[0].kind = "live_state"
+resolution.inputs[0].observed_hash = "sha256:def"
+resolution.inputs[0].resource = "payments.aws_s3_bucket.payments-logs"
+resolution.resolved_at = "2026-11-15T12:00:00Z"

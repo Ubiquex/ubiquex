@@ -2823,3 +2823,41 @@ so a resolved proposal records the expanded result and never the argument
 that produced it. Recovering an argument from the ledger is unavailable
 in either language, which is a separate finding and not one more
 declaration field can address.
+
+### Amendment: a renderer for a pending proposal (2026-11-15, UBI-296)
+
+**New code, no schema change.** When an agent authors a proposal, the
+proposal hash proves the applied change matches the accepted one, but not
+what the human who accepted it was looking at, and the agent writes
+`intent.summary` itself. Recording the hash of the exact bytes shown to
+the approver closes that gap, and needs those bytes to be stable. Nothing
+rendered a pending proposal: `ubx render`
+renders a stack's current state, and the receipt `ubx plan` prints is
+terminal presentation code that nothing holds to byte stability. This
+amendment adds the renderer. Recording its hash is the next amendment's
+job.
+
+`core.RenderProposal` renders a proposal's **hashed content**, exactly
+what `Hash` covers, decoded from canonical JSON. It is a pure function of
+that content and runs under `DoubleRun`. Its first line is
+`core.RendererVersion` (`ubx-render proposal/v1`), so stored bytes name
+the renderer that produced them. The format is fixed by
+`core/testdata/render/proposal.golden`. Any change to the output is a
+golden diff, plus a version bump in the same change.
+
+It renders every value the proposal holds. Nothing is redacted, because
+secrets are references by construction (`$secret` envelopes, "IR —
+resource node" above), and a `$secret` renders whole, as the reference.
+Fields it has no layout for still render, in a final section, so a field
+added later cannot silently go missing from what an approver saw. The
+delta comes first; `intent` follows, labelled as the author's account
+and unchecked. Every value is JSON-quoted and non-printable runes are
+escaped, so a value cannot forge a line of the render.
+
+Nothing here touches hashed content, the ledger, or any stored shape. The
+renderer reads a proposal and returns bytes.
+
+#### Not in this amendment
+
+Recording the hash of the render on an acceptance, storing the bytes, and
+the acceptance method that uses them. That is UBI-294.

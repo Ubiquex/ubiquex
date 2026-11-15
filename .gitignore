@@ -3,3 +3,6 @@
 /dist/
 __pycache__/
 *.pyc
+
+# Local Claude Code settings and worktrees
+.claude/
